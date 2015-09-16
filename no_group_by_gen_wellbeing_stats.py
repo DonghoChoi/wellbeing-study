@@ -5,6 +5,7 @@ import utils
 import glob
 from time import localtime, strftime
 import datetime
+from datetime import date
 import sqlite3 as lite
 import string
 import time
@@ -12,6 +13,7 @@ import csv
 import math
 from collections import Counter
 import optparse
+import json
 
 start_time = 0
 end_time = 1432176252
@@ -53,9 +55,45 @@ files_csv = {}
 shannons_entropy_stats = {}
 shannons_entropy_sms = {}
 shannons_location = {}
+shannons_location_update = {}
+day_night_location_ratio = {}
+weekday_weekend_location_ratio = {}
+weekday_weekend_call_ratio = {}
+weekday_weekend_sms_ratio = {}
 device_imei = {}
 location_stats = {}
 location_stats_interval = {}
+call_type_csv = []
+sms_type_csv = []
+eligible_days_call = {}
+eligible_days_sms = {}
+imei_timestamp = {}
+imei_num_timestamp = {}
+imei_smstimestamp = {}
+imei_num_smstimestamp = {}
+
+#New attributes
+distinct_contacts = defaultdict(list)
+distinct_contacts_sms = defaultdict(list)
+call_duration_total = {}
+incoming_call_count = {}
+outgoing_call_count = {}
+missed_call_count = {}
+incoming_sms_count = {}
+outgoing_sms_count = {}
+day_night_call_ratio = {}
+day_night_sms_ratio = {}
+first_contacts_call = set()
+second_contacts_call = set()
+new_contacts_call = set()
+first_contacts_sms = set()
+second_contacts_sms = set()
+new_contacts_sms = set()
+first_location = set()
+second_location = set()
+new_location = set()
+
+
 
 con = 0
 
@@ -135,13 +173,69 @@ def write_stats_to_csv():
     for x in data:
         std_mtime = time.strftime('%Y-%m-%d', time.localtime(x[1]))
         record_time = int(x[1])
+        time_of_the_day = time.strftime('%H:%M', time.localtime(x[1]))
         
         number_index = x[2].find('"number"')
         last_index = x[2].find(',', number_index)
         call_id = x[2][number_index:last_index-4]
         
-    
+        # code below for the distinction between the type of call and recording it
+        if record_time>start_time and record_time<end_time:
+            formatted_call_record = x[2].replace('\\','').replace('"{','{').replace('}"','}')
 
+            #print formatted_call_record
+            json_call_record = json.loads(formatted_call_record)
+            #print json_call_record['type']
+            #print json_call_record['number']['ONE_WAY_HASH']
+            call_type = json_call_record['type']
+            call_type_csv_row = []
+
+            try:
+                if call_type == 1:
+                    #Incoming Call
+                    call_type_csv_row.append(device_imei[x[0]])
+                    call_type_csv_row.append(json_call_record['number']['ONE_WAY_HASH'])
+                    call_type_csv_row.append(json_call_record['timestamp'])
+                    call_type_csv_row.append("Incoming")
+                    call_type_csv_row.append(json_call_record['duration'])
+                    if incoming_call_count.has_key(device_imei[x[0]]):
+                        incoming_call_count[device_imei[x[0]]] += 1
+                    else:
+                        incoming_call_count[device_imei[x[0]]] = 1
+                
+                if call_type == 2:
+                    #Outgoing Call
+                    call_type_csv_row.append(json_call_record['number']['ONE_WAY_HASH'])
+                    call_type_csv_row.append(device_imei[x[0]])
+                    call_type_csv_row.append(json_call_record['timestamp'])
+                    call_type_csv_row.append("Outgoing")
+                    call_type_csv_row.append(json_call_record['duration'])
+                    if outgoing_call_count.has_key(device_imei[x[0]]):
+                        outgoing_call_count[device_imei[x[0]]] += 1
+                    else:
+                        outgoing_call_count[device_imei[x[0]]] = 1
+
+                if call_type == 3:
+                    #Missed Call
+                    call_type_csv_row.append(device_imei[x[0]])
+                    call_type_csv_row.append(json_call_record['number']['ONE_WAY_HASH'])
+                    call_type_csv_row.append(json_call_record['timestamp'])
+                    call_type_csv_row.append("Missed")
+                    call_type_csv_row.append(json_call_record['duration'])
+                    if missed_call_count.has_key(device_imei[x[0]]):
+                        missed_call_count[device_imei[x[0]]] += 1
+                    else:
+                        missed_call_count[device_imei[x[0]]] = 1
+            
+                if len(call_type_csv_row)>0:
+                    call_type_csv.append(call_type_csv_row)
+                else:
+                    print "Find the mysterious call types"
+                    print call_type
+            except KeyError:
+                pass
+
+        # code ends here
         try:
           distinct_calls[x[0]]
         except KeyError:
@@ -165,7 +259,7 @@ def write_stats_to_csv():
           call_duration[x[0]][std_mtime] += int(duration_str)
 
         if record_time>start_time and record_time<end_time:
-          
+          date_time = datetime.datetime.strptime(std_mtime,'%Y-%m-%d') 
           try:
             device_imei[x[0]]
           except KeyError:
@@ -175,14 +269,58 @@ def write_stats_to_csv():
           try:
             shannons_entropy_stats[device_imei[x[0]]]
           except KeyError:
+            call_duration_total[device_imei[x[0]]] = 0
             shannons_entropy_stats[device_imei[x[0]]] = {}
-        
+            day_night_call_ratio[device_imei[x[0]]] = {}
+            weekday_weekend_call_ratio[device_imei[x[0]]] = {}
+       
           try:
             shannons_entropy_stats[device_imei[x[0]]][call_id] += 1
           except KeyError:
             shannons_entropy_stats[device_imei[x[0]]][call_id] = 1
+
+          # Get the first two weeks contact, comparison date is 3-20-2015
+          if record_time<1426824000:
+            first_contacts_call.add(call_id)
+          else:
+            second_contacts_call.add(call_id)
+            
+          if date_time.weekday()==5 or date_time.weekday()==6:
+            try:
+              weekday_weekend_call_ratio[device_imei[x[0]]]["weekend"] += 1
+            except KeyError:
+              weekday_weekend_call_ratio[device_imei[x[0]]]["weekend"] = 1
+          else:
+            try:
+              weekday_weekend_call_ratio[device_imei[x[0]]]["weekday"] += 1
+            except KeyError:
+              weekday_weekend_call_ratio[device_imei[x[0]]]["weekday"] = 1
+
+          #Distinct contacts
+          distinct_contacts[device_imei[x[0]]].append(call_id)
+
+          call_duration_total[device_imei[x[0]]] += int(duration_str)
+          if time_of_the_day>"18:00" and time_of_the_day<"6:00":
+            try:
+              day_night_call_ratio[device_imei[x[0]]]["NIGHT"] += 1
+            except:
+              day_night_call_ratio[device_imei[x[0]]]["NIGHT"] = 1
+          else:
+            try:
+              day_night_call_ratio[device_imei[x[0]]]["DAY"] += 1
+            except:
+              day_night_call_ratio[device_imei[x[0]]]["DAY"] = 1
+            
     #print d  
     #for row in data:
+
+    print "Test printing the old and new contacts"
+    print first_contacts_call
+    print "%%%%%%%%%%"
+    print second_contacts_call
+    print len(first_contacts_call)
+    print len(second_contacts_call)
+    exit()
     print "Number of calls for the all the devices on a day"
     
     for imei, value in distinct_calls.iteritems():
@@ -218,6 +356,8 @@ def write_stats_to_csv():
 
         print "Number of distinct users called on {} is {}".format(date,j)
 
+    #print "Call type CSV"
+    #print call_type_csv
 
 
     d = defaultdict(list)
@@ -233,13 +373,62 @@ def write_stats_to_csv():
     for x in data:
         std_mtime = time.strftime('%Y-%m-%d', time.localtime(x[1]))
         d[x[0]].append(std_mtime)
+        time_of_the_day = time.strftime('%H:%M', time.localtime(x[1]))
         record_time = int(x[1])
         
         number_index = x[2].find('"address"')
         last_index = x[2].find(',', number_index)
         call_id = x[2][number_index:last_index-4]
         print "Device {} time {} date {} call_id {}".format(x[0],x[1],std_mtime,call_id)
-        
+       
+        # code below for the distinction between the type of call and recording it
+        if record_time>start_time and record_time<end_time:
+            formatted_sms_record = x[2].replace('\\','').replace('"{','{').replace('}"','}')
+
+            print formatted_sms_record
+            json_sms_record = json.loads(formatted_sms_record)
+            print json_sms_record['type']
+            print json_sms_record['address']['ONE_WAY_HASH']
+            sms_type = json_sms_record['type']
+            sms_type_csv_row = []
+
+            try:
+                device_imei[x[0]]
+            except KeyError:
+                device_imei[x[0]] = x[0]
+            try:
+                if sms_type == 1:
+                    #Incoming Sms
+                    sms_type_csv_row.append(device_imei[x[0]])
+                    sms_type_csv_row.append(json_sms_record['address']['ONE_WAY_HASH'])
+                    sms_type_csv_row.append(json_sms_record['timestamp'])
+                    sms_type_csv_row.append("Incoming")
+                    if incoming_sms_count.has_key(device_imei[x[0]]):
+                        incoming_sms_count[device_imei[x[0]]] += 1
+                    else:
+                        incoming_sms_count[device_imei[x[0]]] = 1
+                
+                if sms_type == 2:
+                    #Outgoing Sms
+                    sms_type_csv_row.append(json_sms_record['address']['ONE_WAY_HASH'])
+                    sms_type_csv_row.append(device_imei[x[0]])
+                    sms_type_csv_row.append(json_sms_record['timestamp'])
+                    sms_type_csv_row.append("Outgoing")
+                    if outgoing_sms_count.has_key(device_imei[x[0]]):
+                        outgoing_sms_count[device_imei[x[0]]] += 1
+                    else:
+                        outgoing_sms_count[device_imei[x[0]]] = 1
+
+                if len(sms_type_csv_row)>0:
+                    sms_type_csv.append(sms_type_csv_row)
+                else:
+                    print "DANGER"
+                    print sms_type
+            except KeyError:
+                pass
+
+        # code ends here
+
         try:
           distinct_sms[x[0]]
         except KeyError:
@@ -248,6 +437,7 @@ def write_stats_to_csv():
         distinct_sms[x[0]][std_mtime].append(call_id)
         
         if record_time>start_time and record_time<end_time:
+          date_time = datetime.datetime.strptime(std_mtime,'%Y-%m-%d') 
           try:
             device_imei[x[0]]
           except KeyError:
@@ -258,14 +448,43 @@ def write_stats_to_csv():
             shannons_entropy_sms[device_imei[x[0]]]
           except KeyError:
             shannons_entropy_sms[device_imei[x[0]]] = {}
+            day_night_sms_ratio[device_imei[x[0]]] = {}
+            weekday_weekend_sms_ratio[device_imei[x[0]]] = {}
           
           try:
             shannons_entropy_sms[device_imei[x[0]]][call_id] += 1
           except KeyError:
             shannons_entropy_sms[device_imei[x[0]]][call_id] = 1
+          
+          #Distinct contacts
+          distinct_contacts_sms[device_imei[x[0]]].append(call_id)
+          
+          if date_time.weekday()==5 or date_time.weekday()==6:
+            try:
+              weekday_weekend_sms_ratio[device_imei[x[0]]]["weekend"] += 1
+            except KeyError:
+              weekday_weekend_sms_ratio[device_imei[x[0]]]["weekend"] = 1
+          else:
+            try:
+              weekday_weekend_sms_ratio[device_imei[x[0]]]["weekday"] += 1
+            except KeyError:
+              weekday_weekend_sms_ratio[device_imei[x[0]]]["weekday"] = 1
+          
+          if time_of_the_day>"18:00" and time_of_the_day<"6:00":
+            try:
+              day_night_sms_ratio[device_imei[x[0]]]["NIGHT"] += 1
+            except:
+              day_night_sms_ratio[device_imei[x[0]]]["NIGHT"] = 1
+          else:
+            try:
+              day_night_sms_ratio[device_imei[x[0]]]["DAY"] += 1
+            except:
+              day_night_sms_ratio[device_imei[x[0]]]["DAY"] = 1
+            
 
     #print d  
     #for row in data:
+
     print "Number of SMS for all devices on a day"
 
     for imei, value in distinct_sms.iteritems():
@@ -392,6 +611,97 @@ def write_stats_to_csv():
           location_stats[device_imei[x[0]]][std_mtime] = []
 
         location_stats[device_imei[x[0]]][std_mtime].append(time_long_lat_list)
+
+    ########################################
+
+    # Code to get only the first location of an hour.
+    
+    list_of_lists = []
+    location_stats_interval_copy = location_stats_interval
+    first_lat_long_hour = {}
+
+    for imei, date in location_stats.iteritems():
+      for date_key, time_long_lat in date.iteritems():
+        for element in time_long_lat:
+          time_hour = element[0][:element[0].index(":")]
+          print(time_hour)
+          plus_one = int(time_hour)+1
+          if plus_one<10:
+            plus_one = "0"+str(plus_one)
+          else:
+            plus_one = str(plus_one)
+          interval_string = time_hour+":00-"+str(plus_one)+":00"
+          print interval_string
+          try:
+            if location_stats_interval_copy[imei][date_key][interval_string] == 0 and int(element[3])>start_time and int(element[3])<end_time:
+              location_stats_interval_copy[imei][date_key][interval_string]+=1
+              ref = imei+date_key+interval_string
+              location_bin = str(element[1]) + " " + str(element[2])
+            
+              try:
+                shannons_location_update[imei]
+                day_night_location_ratio[imei]
+              except KeyError:
+                shannons_location_update[imei] = {}
+                day_night_location_ratio[imei] = {}
+              
+              try:
+                shannons_location_update[imei][location_bin] += 1
+              except KeyError:
+                shannons_location_update[imei][location_bin] = 1
+
+              if element[0]>"18:00" and element[0]<"6:00":
+                try:
+                  day_night_location_ratio[imei]["NIGHT"]
+                except:
+                  day_night_location_ratio[imei]["NIGHT"] = {}
+                try:
+                  day_night_location_ratio[imei]["NIGHT"][location_bin] += 1
+                except KeyError:
+                  day_night_location_ratio[imei]["NIGHT"][location_bin] = 1
+              else:
+                try:
+                  day_night_location_ratio[imei]["DAY"]
+                except:
+                  day_night_location_ratio[imei]["DAY"] = {}
+                try:
+                  day_night_location_ratio[imei]["DAY"][location_bin] += 1
+                except KeyError:
+                  day_night_location_ratio[imei]["DAY"][location_bin] = 1
+              first_lat_long_hour[ref] = [element[1], element[2]]
+          except KeyError:
+            print "KeyError in location interval"
+            print imei
+
+    print "OUPUT!!!!!"
+
+    list_of_lists = []
+    for imei, date_1 in location_stats_interval_copy.iteritems():
+      for date_key, interval in date_1.iteritems():
+        for time_slot, freq in interval.iteritems():
+          if freq>0:
+            ref = imei+date_key+time_slot
+            row = [imei, date_key, time_slot, freq, first_lat_long_hour[ref][0], first_lat_long_hour[ref][1]]
+          else:
+            row = [imei, date_key, time_slot, freq, 0, 0]
+          #print row
+          list_of_lists.append(row)
+
+    list_of_lists.sort(key=lambda x:(x[0], x[1], x[2]))
+
+    if len(file) > 0:
+      resultFile = open(file + "_location_interval_first_location.csv",'wb')
+    else:  
+      resultFile = open("output_location_interval_first_location.csv",'wb')
+    wr = csv.writer(resultFile, dialect='excel')
+    wr.writerow(['IMEI','Day','Time_slot','Frequency','Longitude','Latitude'])
+    for x in list_of_lists:
+      row = [x[0],x[1],x[2],x[3],x[4],x[5]]
+      wr.writerow(row)
+
+    resultFile.close()
+
+    ########################################
         
     for imei, value in distinct_locations.iteritems():
       for date, inner_list in value.iteritems():
@@ -424,6 +734,116 @@ def write_stats_to_csv():
 
         files_csv[imei][date]["Distinct Locations"] = j
         print "Distinct locations on {} is {}".format(date,j)
+    
+    #### Code to add the first call log date and number of days of good call
+
+    cur = con.cursor()
+    cur.execute("PRAGMA temp_store = 2")
+
+
+    data = cur.execute("""select imei,timestamp from data
+                          where probe like '%Call%'""")
+
+    for d in data:
+      imei_num_timestamp[d[0]] = []
+
+    cur = con.cursor()
+    data = cur.execute("""select imei,timestamp from data
+                          where probe like '%Call%'""")
+
+    for d in data:
+      if time.strftime('%Y-%m-%d', time.localtime(d[1])) > '2015-02-11' and time.strftime('%Y-%m-%d', time.localtime(d[1])) < '2015-04-27':
+        imei_num_timestamp[d[0]].append(time.strftime('%Y-%m-%d', time.localtime(d[1])))
+
+    #print imei_num_timestamp
+    for imei,timestamp in imei_num_timestamp.iteritems():
+      imei_num_timestamp[imei] = len(set(imei_num_timestamp[imei]))
+
+    cur = con.cursor()
+    data = cur.execute("""select imei,timestamp from data
+                          where probe like '%Call%'""")
+
+    for d in data:
+      print d
+      imei_timestamp[d[0]] = 222222222222222
+
+    cur = con.cursor()
+    data = cur.execute("""select imei,timestamp from data
+                          where probe like '%Call%'""")
+    for d in data:
+      #print "dfdfd"
+      if imei_timestamp[d[0]]>d[1]:
+        imei_timestamp[d[0]] = d[1]
+
+    for imei,timestamp in imei_timestamp.iteritems():
+      imei_timestamp[imei] = time.strftime('%Y-%m-%d', time.localtime(timestamp))
+
+    cur = con.cursor()
+    data = cur.execute("""select imei,timestamp from data
+                          where probe like '%Sms%'""")
+
+    for d in data:
+      imei_num_smstimestamp[d[0]] = []
+
+    cur = con.cursor()
+    data = cur.execute("""select imei,timestamp from data
+                          where probe like '%Sms%'""")
+
+    for d in data:
+      if time.strftime('%Y-%m-%d', time.localtime(d[1])) > '2015-02-11' and time.strftime('%Y-%m-%d', time.localtime(d[1])) < '2015-04-27':
+        imei_num_smstimestamp[d[0]].append(time.strftime('%Y-%m-%d', time.localtime(d[1])))
+
+    #print imei_num_timestamp
+    for imei,timestamp in imei_num_smstimestamp.iteritems():
+      imei_num_smstimestamp[imei] = len(set(imei_num_smstimestamp[imei]))
+
+    cur = con.cursor()
+    data = cur.execute("""select imei,timestamp from data
+                          where probe like '%Sms%'""")
+
+    for d in data:
+      print d
+      imei_smstimestamp[d[0]] = 222222222222222
+
+    cur = con.cursor()
+    data = cur.execute("""select imei,timestamp from data
+                          where probe like '%Sms%'""")
+    for d in data:
+      #print "dfdfd"
+      if imei_smstimestamp[d[0]]>d[1]:
+        imei_smstimestamp[d[0]] = d[1]
+
+    for imei,timestamp in imei_smstimestamp.iteritems():
+      imei_smstimestamp[imei] = time.strftime('%Y-%m-%d', time.localtime(timestamp))
+    
+    for imei,date1 in imei_smstimestamp.iteritems():
+      mdate = "2015-02-12"
+      mdate1 = datetime.datetime.strptime(mdate, "%Y-%m-%d")
+
+      #d = time.strftime('%Y-%m-%d', time.localtime(int(date1)))
+      d = datetime.datetime.strptime(date1, "%Y-%m-%d")
+
+      if d<mdate1:
+        eligible_days_sms[imei] = 74
+      else:
+        rdate = "2015-04-27"
+        rdate1 = datetime.datetime.strptime(rdate, "%Y-%m-%d")
+        eligible_days_sms[imei] = (rdate1 - d).days
+
+    for imei,date1 in imei_timestamp.iteritems():
+      mdate = "2015-02-12"
+      mdate1 = datetime.datetime.strptime(mdate, "%Y-%m-%d")
+
+      #d = time.strftime('%Y-%m-%d', time.localtime(int(date1)))
+      d = datetime.datetime.strptime(date1, "%Y-%m-%d")
+
+      if d<mdate1:
+        eligible_days_call[imei] = 74
+      else:
+        rdate = "2015-04-27"
+        rdate1 = datetime.datetime.strptime(rdate, "%Y-%m-%d")
+        eligible_days_call[imei] = (rdate1 - d).days
+    #### Code Ends here
 
 def create_csv():
 
@@ -435,23 +855,48 @@ def create_csv():
     location_loyalty = {}
     call_loyalty = {}
     sms_loyalty = {}
+    home_work_ratio = {}
+    location_percentage_time_spent = {}
     
     location_stie = {}
     call_stie = {}
     sms_stie = {}
+    location_stie_value = {}
+    call_stie_value = {}
+    sms_stie_value = {}
     
     location_wtie = {}
     call_wtie = {}
     sms_wtie = {}
+    location_wtie_value = {}
+    call_wtie_value = {}
+    sms_wtie_value = {}
     
     location_count = {}
+    location_unique_count = {}
     call_count = {}
     sms_count = {}
+    day_night_ratio_location_value = {}
+    day_night_ratio_call_value = {}
+    day_night_ratio_sms_value = {}
+
+    distinct_contacts_count = {}
+    distinct_contacts_sms_count = {}
+    number_of_strong_ties_location = {}
+    number_of_strong_ties_call= {}
+    number_of_strong_ties_sms = {}
+    inout_ratio_call = {}
+    inout_ratio_sms = {}
+    response_rate = {}
+    missed_call_rate = {}
+    weekday_weekend_ratio_location_value = {}
+    weekday_weekend_ratio_call_value = {}
+    weekday_weekend_ratio_sms_value = {}
     
     table = []
 
     # Calculate the Shannon's Entropy 
-    for imei, ndict in shannons_location.iteritems():
+    for imei, ndict in shannons_location_update.iteritems():
       entropy = 0
       sum1 = sum(ndict.values())
       k = len(ndict)
@@ -496,9 +941,13 @@ def create_csv():
     #  print ndict
     
     # Calculate the Loyalty 
-    for imei, ndict in shannons_location.iteritems():
+    for imei, ndict in shannons_location_update.iteritems():
       entropy = 0
       sum1 = sum(ndict.values())
+      unique_locations = list(ndict.keys())
+      unique_locations_set = set(unique_locations)
+
+      location_unique_count[imei] = len(unique_locations_set)
       location_count[imei] = sum1
       top_3 = dict(Counter(ndict).most_common(3))
       #print top_3
@@ -508,6 +957,29 @@ def create_csv():
           entropy += p_x
       location_loyalty[imei] = entropy
 
+    # Calculate the Percentage of the time spent 
+    for imei, ndict in shannons_location_update.iteritems():
+      entropy = 0
+      sum1 = sum(ndict.values())
+      top_1 = dict(Counter(ndict).most_common(1))
+      #print top_3
+      for location_bin, count in top_1.iteritems():
+        percent = (float(count)/sum1)*100
+        
+      location_percentage_time_spent[imei] = float("{0:.2f}".format(percent))
+    
+    # Calculate the Day/night location ratio
+    day_count = 0
+    night_count = 0
+    print day_night_location_ratio
+    for imei, time_of_day in day_night_location_ratio.iteritems():
+      for time, location_string in time_of_day.iteritems():
+        if time=="DAY":
+          day_count = len(location_string)
+        else:
+          night_count = len(location_string)
+      day_night_ratio_location_value[imei]= float("{0:.2f}".format(float(day_count)/float(night_count)))
+    
     #print "LOYALTY FOR LOCATION" 
     #for imei, ndict in location_loyalty.iteritems():
     #  print ndict
@@ -522,6 +994,13 @@ def create_csv():
         if p_x > 0:
           entropy += p_x
       call_loyalty[imei] = entropy
+      #calculate the number of contacts here
+      distinct_contacts_count[imei] = len(set(distinct_contacts[imei]))
+      inout_ratio_call[imei] = (float(incoming_call_count[imei])/outgoing_call_count[imei])*100
+      response_rate[imei] = (float(incoming_call_count[imei])/(call_count[imei]-outgoing_call_count[imei]))*100
+      missed_call_rate[imei] = (float(missed_call_count[imei])/call_count[imei])*100
+      day_night_ratio_call_value[imei]= float("{0:.2f}".format(float(day_night_call_ratio[imei]["DAY"])/float(day_night_call_ratio[imei]["NIGHT"])))
+      weekday_weekend_ratio_call_value[imei]= float("{0:.2f}".format(float(weekday_weekend_call_ratio[imei]["weekday"])/float(weekday_weekend_call_ratio[imei]["weekend"])))
 
     #print "LOYALTY FOR CALL" 
     #for imei, ndict in call_loyalty.iteritems():
@@ -537,13 +1016,19 @@ def create_csv():
         if p_x > 0:
           entropy += p_x
       sms_loyalty[imei] = entropy
-
+      distinct_contacts_sms_count[imei] = len(set(distinct_contacts_sms[imei]))
+      try:  
+        inout_ratio_sms[imei] = (float(incoming_sms_count[imei])/outgoing_sms_count[imei])*100
+      except KeyError:
+        pass
+      day_night_ratio_sms_value[imei]= float("{0:.2f}".format(float(day_night_sms_ratio[imei]["DAY"])/float(day_night_sms_ratio[imei]["NIGHT"])))
+      weekday_weekend_ratio_sms_value[imei]= float("{0:.2f}".format(float(weekday_weekend_sms_ratio[imei]["weekday"])/float(weekday_weekend_sms_ratio[imei]["weekend"])))
     #print "LOYALTY FOR SMS" 
     #for imei, ndict in sms_loyalty.iteritems():
     #  print ndict
 
     print "Strong ties for locations"
-    for imei, ndict in shannons_location.iteritems():
+    for imei, ndict in shannons_location_update.iteritems():
       strong_tie = 0
       last = 0
       strong_tie_num = float(len(ndict))/3
@@ -555,11 +1040,21 @@ def create_csv():
       else:
         pick_k = int(strong_tie_num)
 
+      number_of_strong_ties_location[imei] = pick_k
+      
+      top_2 = dict(Counter(ndict).most_common(2))
+      value = 0;
+      top_2_list = top_2.values()
+      print top_2_list
+      try:
+        if top_2_list[0]>top_2_list[1]:
+          home_work_ratio[imei] = float("{0:.2f}".format(float(top_2_list[0])/float(top_2_list[1])))
+        else:
+          home_work_ratio[imei] = float("{0:.2f}".format(float(top_2_list[1])/float(top_2_list[0])))
+      except:
+         home_work_ratio[imei] = "NA"
       top_k = dict(Counter(ndict).most_common(pick_k))
       bottom_k = sorted(ndict.values())[:pick_k]
-      #print "Top k"+str(top_k)
-      #print "Bottom k"+str(bottom_k)
-      #print top_3
       for location_bin, count in top_k.iteritems():
         strong_tie += count
         last = count
@@ -570,6 +1065,7 @@ def create_csv():
         strong_tie -= last
         strong_tie += float(last)*fraction
 
+      location_stie_value[imei] = strong_tie
       #print "Strong tie value above"+str(strong_tie)
       strong_tie = (strong_tie/float(sum1)) * 100
       #print "Strong tie"+str(strong_tie)
@@ -581,14 +1077,8 @@ def create_csv():
         weak_tie -= bottom_k[pick_k-1]
         weak_tie += float(bottom_k[pick_k-1])*fraction
 
+      location_wtie_value[imei] = weak_tie
       weak_tie = (weak_tie/float(sum1)) * 100
-
-      #if weak_tie == 0:
-      print "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
-      print "Bottom k"+str(bottom_k)
-      print "Sum of bootom k"+str(sum(bottom_k))
-      print sum1
-      print "Weak tie"+str(weak_tie)
 
       location_wtie[imei] = weak_tie
 
@@ -611,6 +1101,9 @@ def create_csv():
         pick_k = int(strong_tie_num)
 
       print pick_k
+
+      number_of_strong_ties_call[imei] = pick_k
+
       top_k = dict(Counter(ndict).most_common(pick_k))
       bottom_k = sorted(ndict.values())[:pick_k]
       #print top_3
@@ -624,8 +1117,9 @@ def create_csv():
         strong_tie -= last
         strong_tie += float(last)*fraction
 
+      call_stie_value[imei] = strong_tie
       strong_tie = (strong_tie/float(sum1)) * 100
-      print strong_tie
+      #print strong_tie
 
       call_stie[imei] = strong_tie
       weak_tie = sum(bottom_k)
@@ -633,8 +1127,9 @@ def create_csv():
         weak_tie -= bottom_k[pick_k-1]
         weak_tie += float(bottom_k[pick_k-1])*fraction
 
+      call_wtie_value[imei] = weak_tie
       weak_tie = (weak_tie/float(sum1)) * 100
-      print weak_tie
+      #print weak_tie
 
       call_wtie[imei] = weak_tie
 
@@ -655,6 +1150,8 @@ def create_csv():
         pick_k = int(strong_tie_num) + 1
       else:
         pick_k = int(strong_tie_num)
+      
+      number_of_strong_ties_sms[imei] = pick_k
 
       print pick_k
       top_k = dict(Counter(ndict).most_common(pick_k))
@@ -670,6 +1167,7 @@ def create_csv():
         strong_tie -= last
         strong_tie += float(last)*fraction
 
+      sms_stie_value[imei] = strong_tie
       strong_tie = (strong_tie/float(sum1)) * 100
       print strong_tie
 
@@ -680,6 +1178,7 @@ def create_csv():
         weak_tie -= bottom_k[pick_k-1]
         weak_tie += float(bottom_k[pick_k-1])*fraction
 
+      sms_wtie_value[imei] = weak_tie
       weak_tie = (weak_tie/float(sum1)) * 100
       print weak_tie
 
@@ -694,11 +1193,14 @@ def create_csv():
     else:  
       resultFile = open("output_entropy.csv",'wb')
     wr = csv.writer(resultFile, dialect='excel')
-    wr.writerow(['IMEI','Call Count','Sms Count','Location Count','Call Entropy','Sms Entropy','Location Entropy','Call Loyalty','Sms Loyalty','Location Loyalty','Call Strong ties','Sms Strong ties','Location Strong ties','Call Weak ties','Sms Weak ties','Location Weak ties'])
+    wr.writerow(['IMEI','Call Count','Sms Count','Location Count','Unique location count','Day night location ratio','Percentage of time spent in a location','First Call log date','Days with call data','Number of days in which call data is spread','Number of calls per day','Distinct users call','Total Call duration','In-Out ratio','Call Response rate','Missed call percentage','First Sms log date','Days with Sms data','Number of days in which sms data is spread','Number of Sms per day','Distinct users sms','Inout ratio SMS','Call Entropy','Sms Entropy','Location Entropy','Call Loyalty','Sms Loyalty','Location Loyalty','Call Strong ties','Sms Strong ties','Location Strong ties','Call Weak ties','Sms Weak ties','Location Weak ties','Call Strong ties value','Sms Strong ties value','Location Strong ties value','Call Weak ties value','Sms Weak ties value','Location Weak ties value','Call S/W ties count','Sms S/W ties count','Location S/W ties count','Home Work Ratio','Day night Call ratio','Day night sms ratio','Weekday weekend call ratio','Weekday weekend SMS ratio'])
     imei_list = list(set(device_imei.values()))
     for imei in imei_list:
       row_list = []
       row_list.append(imei)
+      if imei.find("androidId")>0:
+        continue
+
       try:
         row_list.append(call_count[imei])
       except KeyError:
@@ -712,75 +1214,221 @@ def create_csv():
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(call_entropy[imei]))
-        rd_2 = int(rd_2*100)
+        row_list.append(location_unique_count[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(day_night_ratio_location_value[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(location_percentage_time_spent[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(imei_timestamp[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(imei_num_timestamp[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(eligible_days_call[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(int(call_count[imei]/eligible_days_call[imei]))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(distinct_contacts_count[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(call_duration_total[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(inout_ratio_call[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(response_rate[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(missed_call_rate[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(imei_smstimestamp[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(imei_num_smstimestamp[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(eligible_days_sms[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(int(sms_count[imei]/eligible_days_sms[imei]))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(distinct_contacts_sms_count[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(inout_ratio_sms[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        print "^^^^^^"
+        rd_2 = call_entropy[imei] * 100
+        print rd_2
+        rd_2 = int(round(rd_2))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(sms_entropy[imei]))
-        rd_2 = int(rd_2*100)
+        rd_2 = sms_entropy[imei] * 100
+        print rd_2
+        rd_2 = int(round(rd_2))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(location_entropy[imei]))
-        rd_2 = int(rd_2*100)
+        rd_2 = location_entropy[imei] * 100
+        print rd_2
+        rd_2 = int(round(rd_2))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(call_loyalty[imei]))
-        rd_2 = int(rd_2*100)
+        rd_2 = call_loyalty[imei] * 100
+        print rd_2
+        rd_2 = int(round(rd_2))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(sms_loyalty[imei]))
-        rd_2 = int(rd_2*100)
+        rd_2 = sms_loyalty[imei] * 100
+        print rd_2
+        rd_2 = int(round(rd_2))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(location_loyalty[imei]))
-        rd_2 = int(rd_2*100)
+        rd_2 = location_loyalty[imei] * 100
+        print rd_2
+        rd_2 = int(round(rd_2))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(call_stie[imei]))
-        rd_2 = int(rd_2)
+        print call_stie[imei]
+        rd_2 = int(round(call_stie[imei]))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(sms_stie[imei]))
-        rd_2 = int(rd_2)
+        print sms_stie[imei]
+        rd_2 = int(round(sms_stie[imei]))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(location_stie[imei]))
-        rd_2 = int(rd_2)
+        print location_stie[imei]
+        rd_2 = int(round(location_stie[imei]))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(call_wtie[imei]))
-        rd_2 = int(rd_2)
+        print call_wtie[imei]
+        rd_2 = int(round(call_wtie[imei]))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(sms_wtie[imei]))
-        rd_2 = int(rd_2)
+        #rd_2 = float("{0:.2f}".format(sms_wtie[imei]))
+        #rd_2 = int(rd_2)
+        #rd_2 = sms_wtie[imei]
+        print sms_wtie[imei]
+        rd_2 = int(round(sms_wtie[imei]))
         row_list.append(rd_2)
       except KeyError:
         row_list.append("NA")
       try:
-        rd_2 = float("{0:.2f}".format(location_wtie[imei]))
-        rd_2 = int(rd_2)
+        #rd_2 = float("{0:.2f}".format(location_wtie[imei]))
+        #rd_2 = int(rd_2)
+        print location_wtie[imei]
+        rd_2 = int(round(location_wtie[imei]))
         row_list.append(rd_2)
+      except KeyError:
+        row_list.append("NA")
+      try:
+        rd_2 = int(round(call_stie_value[imei]))
+        row_list.append(rd_2)
+      except KeyError:
+        row_list.append("NA")
+      try:
+        rd_2 = int(round(sms_stie_value[imei]))
+        row_list.append(rd_2)
+      except KeyError:
+        row_list.append("NA")
+      try:
+        rd_2 = int(round(location_stie_value[imei]))
+        row_list.append(rd_2)
+      except KeyError:
+        row_list.append("NA")
+      try:
+        rd_2 = int(round(call_wtie_value[imei]))
+        row_list.append(rd_2)
+      except KeyError:
+        row_list.append("NA")
+      try:
+        rd_2 = int(round(sms_wtie_value[imei]))
+        row_list.append(rd_2)
+      except KeyError:
+        row_list.append("NA")
+      try:
+        rd_2 = int(round(location_wtie_value[imei]))
+        row_list.append(rd_2)
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(number_of_strong_ties_call[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(number_of_strong_ties_sms[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(number_of_strong_ties_location[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(home_work_ratio[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(day_night_ratio_call_value[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(day_night_ratio_sms_value[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(weekday_weekend_ratio_call_value[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(weekday_weekend_ratio_sms_value[imei])
       except KeyError:
         row_list.append("NA")
           
@@ -788,7 +1436,48 @@ def create_csv():
 
     resultFile.close()
 
+    if len(file) > 0:
+      resultFile = open(file + "_imei_list.csv",'wb')
+    else:  
+      resultFile = open("output_imei_list.csv",'wb')
+    wr = csv.writer(resultFile, dialect='excel')
+    imei_list = list(set(device_imei.values()))
+    for imei in imei_list:
+      row_list = []
+      row_list.append(imei)
+      wr.writerow(row_list)
+
+    resultFile.close()
 ########################################################
+
+############### Call type csv file ######################
+
+    if len(file) > 0:
+      resultFile = open(file + "_call_type.csv",'wb')
+    else:  
+      resultFile = open("output_call_type.csv",'wb')
+    wr = csv.writer(resultFile, dialect='excel')
+    wr.writerow(['To','From','Timestamp','Type','Duration'])
+    for row in call_type_csv:
+      wr.writerow(row)
+
+    resultFile.close()
+    
+    if len(file) > 0:
+      resultFile = open(file + "_sms_type.csv",'wb')
+    else:  
+      resultFile = open("output_sms_type.csv",'wb')
+    wr = csv.writer(resultFile, dialect='excel')
+    wr.writerow(['To','From','Timestamp','Type'])
+    for row in sms_type_csv:
+      wr.writerow(row)
+
+    resultFile.close()
+    
+
+#########################################################
+
+
 
 ###########Location Stats more verbose ##################
     list_of_lists = []
@@ -893,7 +1582,9 @@ def create_csv():
           threshold_loc[imei]
         except KeyError:
           threshold_loc[imei] = {}
-        if sum_per >= 4:
+        
+        # To change the percentage for the location graph change the value below
+        if sum_per >= 75:
           threshold_loc[imei][date_key] = 1
         else:
           threshold_loc[imei][date_key] = 0
@@ -907,6 +1598,71 @@ def create_csv():
 
     print "Graph list"
     print graph_list
+
+
+    ######## Code below to select only the final few IMEI ########
+    cherry_picked_graph_list = {}
+
+    #imei_file = open('imei_selected','r')
+
+    with open('imei_selected', 'r') as f:
+        content = f.readlines()
+
+    print "Deleting the unwanted IMEIs"
+    for ele in content:
+        ele = ele.strip('\n').strip()
+        try:
+            cherry_picked_graph_list[ele] = graph_list[ele]
+        except KeyError:
+            print "Key Error for cherry picking: "+ele
+
+
+    count_of_days = dict(Counter(cherry_picked_graph_list.values()))
+    cherry_picked_graph_list = count_of_days  
+
+    list_of_lists = []
+    for imei, date_1 in cherry_picked_graph_list.iteritems():
+      row = [imei, date_1]
+      list_of_lists.append(row)
+
+    list_of_lists.sort(key=lambda x:(x[0], x[1]))
+    if len(file) > 0:
+      resultFile = open(file + "_location_graph_freq_selected_imei.csv",'wb')
+    else:  
+      resultFile = open("output_location_graph_freq_selected_imei.csv",'wb')
+    wr = csv.writer(resultFile, dialect='excel')
+    wr.writerow(['IMEI','Num of days'])
+    for x in list_of_lists:
+      row = [x[0],x[1]]
+      wr.writerow(row)
+
+    resultFile.close()
+    # Graph code ends here
+
+    list_of_lists = []
+    for imei, date_1 in location_stats_interval.iteritems():
+      for date_key, interval in date_1.iteritems():
+        for time_slot, freq in interval.iteritems():
+          row = [imei, date_key, time_slot, freq]
+          #print row
+          list_of_lists.append(row)
+
+    list_of_lists.sort(key=lambda x:(x[0], x[1], x[2]))
+
+    if len(file) > 0:
+      resultFile = open(file + "_location_graph_selected_imei.csv",'wb')
+    else:  
+      resultFile = open("output_location_graph_selected_imei.csv",'wb')
+    wr = csv.writer(resultFile, dialect='excel')
+    wr.writerow(['IMEI','Day','Time_slot','Frequency'])
+    for x in list_of_lists:
+      row = [x[0],x[1],x[2],x[3]]
+      wr.writerow(row)
+
+    resultFile.close()
+
+
+    ################################################################
 
     count_of_days = dict(Counter(graph_list.values()))
     graph_list = count_of_days  
