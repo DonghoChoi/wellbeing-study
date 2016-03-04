@@ -12,14 +12,31 @@ import time
 import csv
 import math
 from collections import Counter
+from collections import OrderedDict
 import optparse
 import json
+import numpy
+from itertools import groupby
+from operator import itemgetter
+from geopy.distance import vincenty
+
+import numpy as np
+#from matplotlib import pyplot as plt
+
+#from nitime import utils
+from nitime import algorithms as alg
+#from nitime.timeseries import TimeSeries
+#from nitime.viz import plot_tseries
+
 
 start_time = 0
 end_time = 1432176252
-parser = optparse.OptionParser("usage %prog "+"-p <path> -f <file> --start <epoch-time> --end <epoch-time> Ex: 'python %prog -p ~ -f my_test'")
+parser = optparse.OptionParser("usage %prog "+"-p <path> -f <file> --session <session_number> --start <epoch-time> --end <epoch-time> Ex: 'python %prog -p ~ -f my_test'")
 parser.add_option('-p', dest='path', type='string', help='Please give the database path(all_data.db) excluding the file name.')
 parser.add_option('-f', dest='file', type='string', help='This name will be prepended to the output csv`s generated')
+parser.add_option('-i', dest='ignore', type='string', help='Put values as "true" to change the date range ')
+# Dongho 03/04/2016: add session parameter
+parser.add_option('--session', dest='session_number', type='string', help='Put session number')
 parser.add_option('--start', dest='start', type='string', help='Start date for the wellbeing value calculation')
 parser.add_option('--end', dest='end', type='string', help='End date for the wellbeing value calculation')
 (options, args) = parser.parse_args()
@@ -39,10 +56,61 @@ if options.file != None:
 if options.start != None and options.end != None:
   start_time = int(options.start)
   end_time = int(options.end)
+  
+
+# Dongho 03/04/2016: session parameter parsing
+begin_date_1 = datetime.date(2015, 2, 27)
+end_date_1 = datetime.date(2015, 3, 11)
+begin_date_2 = datetime.date(2015, 3, 24)
+end_date_2 = datetime.date(2015, 4, 5)
+begin_date_3 = datetime.date(2015, 4, 9)
+end_date_3 = datetime.date(2015, 4, 21)
+begin_date_4_1 = datetime.date(2015, 7, 23)
+end_date_4_1 = datetime.date(2015, 8, 4)
+begin_date_4_2 = datetime.date(2015, 7,24)
+end_date_4_2 = datetime.date(2015, 8, 5)
+begin_date_4_3 = datetime.date(2015, 7, 27)
+end_date_4_3 = datetime.date(2015, 8, 8)
+
+if options.session_number != None:
+	session_num = int(options.session_number)
+	if session_num == 1:
+		begin_date = begin_date_1
+		end_date = end_date_1
+		start_time = 1425013200
+		end_time = 1426132799
+	elif session_num ==2:
+		begin_date = begin_date_2
+		end_date = end_date_2
+		start_time = 1427169600
+		end_time = 1428292799
+	elif session_num ==3:
+		begin_date = begin_date_3
+		end_date = end_date_3
+		start_time = 1428552000
+		end_time = 1429675199
+	elif session_num ==4:
+		begin_date = begin_date_4_1
+		end_date = end_date_4_1
+		start_time = 1437624000
+		end_time = 1438747199
+	elif session_num ==5:
+		begin_date = begin_date_4_2
+		end_date = end_date_4_2
+		start_time = 1437710400
+		end_time = 1438833599
+	elif session_num ==6:
+		begin_date = begin_date_4_3
+		end_date = end_date_4_3
+		start_time = 1437969600
+		end_time = 1439092799	
+	split_time = (start_time + end_time)/2		
 
 print "Start time and End time"
 print start_time
 print end_time
+print split_time # Dongho 03/04/2016
+
 
 if len(f) == 0:
   print("Enter a path where there is 'all_data.db' files")
@@ -52,8 +120,11 @@ print(f)
 
 print("WELLBEING INDEX... STATISTICS GENERATION IN PROGRESS...")
 files_csv = {}
+ar_values = {}
 shannons_entropy_stats = {}
 shannons_entropy_sms = {}
+shannons_entropy_stats_disc = {}
+shannons_entropy_sms_disc = {}
 shannons_location = {}
 shannons_location_update = {}
 day_night_location_ratio = {}
@@ -83,19 +154,46 @@ incoming_sms_count = {}
 outgoing_sms_count = {}
 day_night_call_ratio = {}
 day_night_sms_ratio = {}
-first_contacts_call = set()
-second_contacts_call = set()
-new_contacts_call = set()
-first_contacts_sms = set()
-second_contacts_sms = set()
-new_contacts_sms = set()
-first_location = set()
-second_location = set()
-new_location = set()
 
-
+first_contacts_call = {}
+second_contacts_call = {}
+new_contacts_call = {}
+first_contacts_call_disc = {}
+second_contacts_call_disc = {}
+new_contacts_call_disc = {}
+new_contacts_call_outgoing = {}
+first_contacts_call_outgoing = {}
+second_contacts_call_outgoing = {}
+first_contacts_sms = {}
+second_contacts_sms = {}
+new_contacts_sms = {}
+first_contacts_sms_disc = {}
+second_contacts_sms_disc = {}
+new_contacts_sms_disc = {}
+first_location = {}
+second_location = {}
+new_location = {}
+location_list = {}
+duration_call = {}
+most_freq_contact_call = {}
+response_params_call = {}
+response_rate_count = {}
+response_latency = {}
+response_params_sms = {}
+response_rate_count_sms = {}
+response_latency_sms = {}
+longest_call = {}
+distinct_calls_outgoing = {}
+first_location_discretionary = {}
+second_location_discretionary = {}
+new_location_discretionary = {}
+shannons_location_discretionary = {}
+shannons_location_discretionary3 = {}
 
 con = 0
+
+
+
 
 def write_stats_to_csv():
     d = defaultdict(list)
@@ -104,17 +202,17 @@ def write_stats_to_csv():
 
     cur = con.cursor()
     cur.execute("PRAGMA temp_store = 2")
-    data_imei = cur.execute("""select device, value from data
+    data_imei = cur.execute("""select device, imei from data
                              where probe like '%Hardware%'""")
 
 
     for x in data_imei:
-      duration_index = x[1].find('"deviceId"')
-      duration_index = x[1].find(':', duration_index)
-      last_index = x[1].find(',', duration_index)
-      imei_num = x[1][duration_index+2:last_index-1]
-      device_imei[x[0]]=imei_num
-    
+      imei_num = x[1]
+      if imei_num!=None:
+        device_imei[x[0]]=str(imei_num)
+  
+    #for key, value in device_imei.iteritems():  
+    #    print key+" "+value
     cur = con.cursor()
     cur.execute("PRAGMA temp_store = 2")
     data = cur.execute("""select device, timestamp, value from data
@@ -129,8 +227,10 @@ def write_stats_to_csv():
     #print imei_list
 
     for imei in imei_list:
-      date1 = datetime.date(2015, 2, 12)
-      date2 = datetime.date(2015, 4, 26)
+      #date1 = datetime.date(2015, 2, 12)
+      date1 = begin_date
+      #date2 = datetime.date(2015, 4, 26)
+      date2 = end_date
       day = datetime.timedelta(days=1)
       while date1 <= date2:
         std_mtime =  date1.strftime('%Y-%m-%d')
@@ -190,6 +290,63 @@ def write_stats_to_csv():
             call_type = json_call_record['type']
             call_type_csv_row = []
 
+            # outgoing calls
+            if call_type == 2:
+                if device_imei[x[0]] in response_params_call:
+                    if 'incoming' in response_params_call[device_imei[x[0]]]:
+                        if json_call_record['number']['ONE_WAY_HASH'] in response_params_call[device_imei[x[0]]]['incoming']:
+                            response_params_call[device_imei[x[0]]]['incoming'][json_call_record['number']['ONE_WAY_HASH']].add(json_call_record['timestamp'])
+                        else:
+                            response_params_call[device_imei[x[0]]]['incoming'][json_call_record['number']['ONE_WAY_HASH']] = set()
+                            response_params_call[device_imei[x[0]]]['incoming'][json_call_record['number']['ONE_WAY_HASH']].add(json_call_record['timestamp'])
+                    else:
+                        response_params_call[device_imei[x[0]]]['incoming'] = {}
+                        response_params_call[device_imei[x[0]]]['incoming'][json_call_record['number']['ONE_WAY_HASH']] = set()
+                        response_params_call[device_imei[x[0]]]['incoming'][json_call_record['number']['ONE_WAY_HASH']].add(json_call_record['timestamp'])
+                else:
+                    response_params_call[device_imei[x[0]]] = {}
+                    response_params_call[device_imei[x[0]]]['incoming'] = {}
+                    response_params_call[device_imei[x[0]]]['incoming'][json_call_record['number']['ONE_WAY_HASH']] = set()
+                    response_params_call[device_imei[x[0]]]['incoming'][json_call_record['number']['ONE_WAY_HASH']].add(json_call_record['timestamp'])
+                
+                #Find distinct outgoing calls
+                
+                # Get the first two weeks contact, comparison date is 3-20-2015
+                # Dongho 03/04/2016: since sensor-study only observed two weeks, I divided into two one-week period
+                #if record_time<1426824000:
+                if record_time <= split_time: #Dongho 03/04/2016
+                    if device_imei[x[0]] in first_contacts_call_outgoing:
+                        first_contacts_call_outgoing[device_imei[x[0]]].add(json_call_record['number']['ONE_WAY_HASH'])
+                    else:
+                        first_contacts_call_outgoing[device_imei[x[0]]] = set()
+                        first_contacts_call_outgoing[device_imei[x[0]]].add(json_call_record['number']['ONE_WAY_HASH'])
+                else:
+                    if device_imei[x[0]] in second_contacts_call_outgoing:
+                        second_contacts_call_outgoing[device_imei[x[0]]].add(json_call_record['number']['ONE_WAY_HASH'])
+                    else:
+                        second_contacts_call_outgoing[device_imei[x[0]]] = set()
+                        second_contacts_call_outgoing[device_imei[x[0]]].add(json_call_record['number']['ONE_WAY_HASH'])
+
+
+            if call_type == 3:
+                if device_imei[x[0]] in response_params_call:
+                    if 'missed' in response_params_call[device_imei[x[0]]]:
+                        if json_call_record['number']['ONE_WAY_HASH'] in response_params_call[device_imei[x[0]]]['missed']:
+                            response_params_call[device_imei[x[0]]]['missed'][json_call_record['number']['ONE_WAY_HASH']].add(json_call_record['timestamp'])
+                        else:
+                            response_params_call[device_imei[x[0]]]['missed'][json_call_record['number']['ONE_WAY_HASH']] = set()
+                            response_params_call[device_imei[x[0]]]['missed'][json_call_record['number']['ONE_WAY_HASH']].add(json_call_record['timestamp'])
+                    else:
+                        response_params_call[device_imei[x[0]]]['missed'] = {}
+                        response_params_call[device_imei[x[0]]]['missed'][json_call_record['number']['ONE_WAY_HASH']] = set()
+                        response_params_call[device_imei[x[0]]]['missed'][json_call_record['number']['ONE_WAY_HASH']].add(json_call_record['timestamp'])
+                else:
+                    response_params_call[device_imei[x[0]]] = {}
+                    response_params_call[device_imei[x[0]]]['missed'] = {}
+                    response_params_call[device_imei[x[0]]]['missed'][json_call_record['number']['ONE_WAY_HASH']] = set()
+                    response_params_call[device_imei[x[0]]]['missed'][json_call_record['number']['ONE_WAY_HASH']].add(json_call_record['timestamp'])
+
+
             try:
                 if call_type == 1:
                     #Incoming Call
@@ -202,6 +359,7 @@ def write_stats_to_csv():
                         incoming_call_count[device_imei[x[0]]] += 1
                     else:
                         incoming_call_count[device_imei[x[0]]] = 1
+
                 
                 if call_type == 2:
                     #Outgoing Call
@@ -236,6 +394,7 @@ def write_stats_to_csv():
                 pass
 
         # code ends here
+
         try:
           distinct_calls[x[0]]
         except KeyError:
@@ -273,6 +432,13 @@ def write_stats_to_csv():
             shannons_entropy_stats[device_imei[x[0]]] = {}
             day_night_call_ratio[device_imei[x[0]]] = {}
             weekday_weekend_call_ratio[device_imei[x[0]]] = {}
+            first_contacts_call[device_imei[x[0]]] = set()
+            second_contacts_call[device_imei[x[0]]] = set()
+            new_contacts_call[device_imei[x[0]]] = set()
+            first_contacts_call_disc[device_imei[x[0]]] = set()
+            second_contacts_call_disc[device_imei[x[0]]] = set()
+            new_contacts_call_disc[device_imei[x[0]]] = set()
+            most_freq_contact_call[device_imei[x[0]]] = []
        
           try:
             shannons_entropy_stats[device_imei[x[0]]][call_id] += 1
@@ -280,11 +446,23 @@ def write_stats_to_csv():
             shannons_entropy_stats[device_imei[x[0]]][call_id] = 1
 
           # Get the first two weeks contact, comparison date is 3-20-2015
-          if record_time<1426824000:
-            first_contacts_call.add(call_id)
+          #if record_time<1426824000:
+          if record_time <= split_time: # Dongho
+            first_contacts_call[device_imei[x[0]]].add(call_id)
           else:
-            second_contacts_call.add(call_id)
+            second_contacts_call[device_imei[x[0]]].add(call_id)
+
+          # Avoid the first two weeks data. Divide the remaining data into two. 
+          # Remove data before 2-26-2015 and split data at 3-26-2015
+          # Dongho: Just did the same thing with right above
+          #if record_time>1425010915 and record_time<1427342400:
+          if record_time > start_time and record_time <= split_time:
+            first_contacts_call_disc[device_imei[x[0]]].add(call_id)
+          #elif record_time>1427342400:
+          elif record_time > split_time:
+            second_contacts_call_disc[device_imei[x[0]]].add(call_id)
             
+
           if date_time.weekday()==5 or date_time.weekday()==6:
             try:
               weekday_weekend_call_ratio[device_imei[x[0]]]["weekend"] += 1
@@ -310,17 +488,26 @@ def write_stats_to_csv():
               day_night_call_ratio[device_imei[x[0]]]["DAY"] += 1
             except:
               day_night_call_ratio[device_imei[x[0]]]["DAY"] = 1
+          
+          if device_imei[x[0]] in duration_call:
+            if call_id in duration_call[device_imei[x[0]]]:
+                print duration_call[device_imei[x[0]]][call_id]
+                duration_call[device_imei[x[0]]][call_id]+=int(duration_str)
+            else:
+                duration_call[device_imei[x[0]]][call_id] = int(duration_str)
+
+          else:
+            duration_call[device_imei[x[0]]] = {}
+            duration_call[device_imei[x[0]]][call_id] = int(duration_str)
             
+          if device_imei[x[0]] in longest_call:
+            if longest_call[imei]<int(duration_str):
+                longest_call[imei] = int(duration_str)
+          else:
+            longest_call[imei] = int(duration_str)
     #print d  
     #for row in data:
 
-    print "Test printing the old and new contacts"
-    print first_contacts_call
-    print "%%%%%%%%%%"
-    print second_contacts_call
-    print len(first_contacts_call)
-    print len(second_contacts_call)
-    exit()
     print "Number of calls for the all the devices on a day"
     
     for imei, value in distinct_calls.iteritems():
@@ -337,28 +524,73 @@ def write_stats_to_csv():
           files_csv[imei]
         except KeyError:
           files_csv[imei] = {}
-        
-        files_csv[imei][date] = {}
-
-        j = len(inner_list)
-
-        files_csv[imei][date]["Num of calls"] = j
-        files_csv[imei][date]["Total Duration"] = call_duration[imei][date]
-        files_csv[imei][date]["Number of SMS"] = 0
-        files_csv[imei][date]["Distinct users SMS"] = 0
-        files_csv[imei][date]["Distinct Locations"] = 0
-
-        print "Number of calls on {} is {}".format(imei,j)
        
-        print "Total call duration on {} is {} second(s)".format(date,call_duration[imei][date])
-        j = len(distinct_cal)
-        files_csv[imei][date]["Distinct Calls"] = j
+		# Dongho       
+        #if date>'2015-02-11' and date<'2015-04-27': 
+        if date >= begin_date.strftime("%Y-%m-%d") and date <= end_date.strftime("%Y-%m-%d"):
+            files_csv[imei][date] = {}
 
-        print "Number of distinct users called on {} is {}".format(date,j)
+            j = len(inner_list)
+
+            files_csv[imei][date]["Num of calls"] = j
+            files_csv[imei][date]["Total Duration"] = call_duration[imei][date]
+            files_csv[imei][date]["Number of SMS"] = 0
+            files_csv[imei][date]["Distinct users SMS"] = 0
+            files_csv[imei][date]["Distinct Locations"] = 0
+
+            print "Number of calls on {} is {}".format(imei,j)
+           
+            print "Total call duration on {} is {} second(s)".format(date,call_duration[imei][date])
+            j = len(distinct_cal)
+            files_csv[imei][date]["Distinct Calls"] = j
+
+            print "Number of distinct users called on {} is {}".format(date,j)
 
     #print "Call type CSV"
     #print call_type_csv
 
+    # Response rate for call
+	""" Dongho - for 3rd batch
+    for imei, call_type in response_params_call.iteritems():
+        for type, num_dict in call_type['missed'].iteritems():
+            for missed_ts in num_dict:
+                if type in response_params_call[imei]['incoming']:
+                    for incoming in response_params_call[imei]['incoming'][type]:
+                        if (missed_ts+3600)>=incoming and missed_ts<incoming:
+                            if imei in response_rate_count: 
+                                response_rate_count[imei]+=1
+                                response_latency[imei]+=(missed_ts+3600)-incoming
+                            else:
+                                response_rate_count[imei] = 1
+                                response_latency[imei]=(missed_ts+3600)-incoming
+                            break
+	"""
+    # code ends here
+
+    # distinct outgoing calls
+
+    for imei, call_type in response_params_call.iteritems():
+        distinct_calls_outgoing[imei] = len(call_type['incoming'])
+
+    # code ends here
+
+
+    ########################################
+     
+    # Discretionary call stats
+
+    for imei, value in new_contacts_call_disc.iteritems():
+        new_contacts_call_disc[imei] = second_contacts_call_disc[imei] - first_contacts_call_disc[imei]
+
+        for call in new_contacts_call_disc[imei]:
+            if imei in shannons_entropy_stats_disc:
+                shannons_entropy_stats_disc[imei][call] = shannons_entropy_stats[imei][call]
+            else:
+                shannons_entropy_stats_disc[imei] = {}
+                shannons_entropy_stats_disc[imei][call] = shannons_entropy_stats[imei][call]
+
+    #print shannons_entropy_stats_disc
+    #######################################
 
     d = defaultdict(list)
     dd = defaultdict(list)
@@ -396,6 +628,43 @@ def write_stats_to_csv():
                 device_imei[x[0]]
             except KeyError:
                 device_imei[x[0]] = x[0]
+
+            if sms_type == 1:
+                if device_imei[x[0]] in response_params_sms:
+                    if 'incoming' in response_params_sms[device_imei[x[0]]]:
+                        if json_sms_record['address']['ONE_WAY_HASH'] in response_params_sms[device_imei[x[0]]]['incoming']:
+                            response_params_sms[device_imei[x[0]]]['incoming'][json_sms_record['address']['ONE_WAY_HASH']].add(json_sms_record['timestamp'])
+                        else:
+                            response_params_sms[device_imei[x[0]]]['incoming'][json_sms_record['address']['ONE_WAY_HASH']] = set()
+                            response_params_sms[device_imei[x[0]]]['incoming'][json_sms_record['address']['ONE_WAY_HASH']].add(json_sms_record['timestamp'])
+                    else:
+                        response_params_sms[device_imei[x[0]]]['incoming'] = {}
+                        response_params_sms[device_imei[x[0]]]['incoming'][json_sms_record['address']['ONE_WAY_HASH']] = set()
+                        response_params_sms[device_imei[x[0]]]['incoming'][json_sms_record['address']['ONE_WAY_HASH']].add(json_sms_record['timestamp'])
+                else:
+                    response_params_sms[device_imei[x[0]]] = {}
+                    response_params_sms[device_imei[x[0]]]['incoming'] = {}
+                    response_params_sms[device_imei[x[0]]]['incoming'][json_sms_record['address']['ONE_WAY_HASH']] = set()
+                    response_params_sms[device_imei[x[0]]]['incoming'][json_sms_record['address']['ONE_WAY_HASH']].add(json_sms_record['timestamp'])
+
+            if sms_type == 2:
+                if device_imei[x[0]] in response_params_sms:
+                    if 'outgoing' in response_params_sms[device_imei[x[0]]]:
+                        if json_sms_record['address']['ONE_WAY_HASH'] in response_params_sms[device_imei[x[0]]]['outgoing']:
+                            response_params_sms[device_imei[x[0]]]['outgoing'][json_sms_record['address']['ONE_WAY_HASH']].add(json_sms_record['timestamp'])
+                        else:
+                            response_params_sms[device_imei[x[0]]]['outgoing'][json_sms_record['address']['ONE_WAY_HASH']] = set()
+                            response_params_sms[device_imei[x[0]]]['outgoing'][json_sms_record['address']['ONE_WAY_HASH']].add(json_sms_record['timestamp'])
+                    else:
+                        response_params_sms[device_imei[x[0]]]['outgoing'] = {}
+                        response_params_sms[device_imei[x[0]]]['outgoing'][json_sms_record['address']['ONE_WAY_HASH']] = set()
+                        response_params_sms[device_imei[x[0]]]['outgoing'][json_sms_record['address']['ONE_WAY_HASH']].add(json_sms_record['timestamp'])
+                else:
+                    response_params_sms[device_imei[x[0]]] = {}
+                    response_params_sms[device_imei[x[0]]]['outgoing'] = {}
+                    response_params_sms[device_imei[x[0]]]['outgoing'][json_sms_record['address']['ONE_WAY_HASH']] = set()
+                    response_params_sms[device_imei[x[0]]]['outgoing'][json_sms_record['address']['ONE_WAY_HASH']].add(json_sms_record['timestamp'])
+
             try:
                 if sms_type == 1:
                     #Incoming Sms
@@ -450,6 +719,12 @@ def write_stats_to_csv():
             shannons_entropy_sms[device_imei[x[0]]] = {}
             day_night_sms_ratio[device_imei[x[0]]] = {}
             weekday_weekend_sms_ratio[device_imei[x[0]]] = {}
+            first_contacts_sms[device_imei[x[0]]] = set()
+            second_contacts_sms[device_imei[x[0]]] = set()
+            new_contacts_sms[device_imei[x[0]]] = set()
+            first_contacts_sms_disc[device_imei[x[0]]] = set()
+            second_contacts_sms_disc[device_imei[x[0]]] = set()
+            new_contacts_sms_disc[device_imei[x[0]]] = set()
           
           try:
             shannons_entropy_sms[device_imei[x[0]]][call_id] += 1
@@ -459,6 +734,24 @@ def write_stats_to_csv():
           #Distinct contacts
           distinct_contacts_sms[device_imei[x[0]]].append(call_id)
           
+          # Get the first two weeks contact, comparison date is 3-20-2015
+          #if record_time<1426824000:
+          if record_time <= split_time: # Dongho
+            first_contacts_sms[device_imei[x[0]]].add(call_id)
+          else:
+            second_contacts_sms[device_imei[x[0]]].add(call_id)
+          
+          # Avoid the first two weeks data. Divide the remaining data into two. 
+          # Remove data before 2-26-2015 and split data at 3-26-2015
+          # Dongho: Just did the same thing with right above
+          #if record_time>1425010915 and record_time<1427342400:
+          if record_time > start_time and record_time <= split_time:
+            first_contacts_sms_disc[device_imei[x[0]]].add(call_id)
+          #elif record_time>1427342400:
+          elif record_time > split_time:
+            second_contacts_sms_disc[device_imei[x[0]]].add(call_id)
+
+        
           if date_time.weekday()==5 or date_time.weekday()==6:
             try:
               weekday_weekend_sms_ratio[device_imei[x[0]]]["weekend"] += 1
@@ -481,9 +774,24 @@ def write_stats_to_csv():
             except:
               day_night_sms_ratio[device_imei[x[0]]]["DAY"] = 1
             
-
-    #print d  
-    #for row in data:
+    # Response rate for sms
+	""" Dongho - for 3rd batch
+    for imei, sms_type in response_params_sms.iteritems():
+        for type, num_dict in sms_type['incoming'].iteritems():
+            for incoming_ts in num_dict:
+                if 'outgoing' in response_params_sms[imei]:
+                    if type in response_params_sms[imei]['outgoing']:
+                        for outgoing in response_params_sms[imei]['outgoing'][type]:
+                            if (incoming_ts+3600)>=outgoing and missed_ts<outgoing:
+                                if imei in response_rate_count_sms: 
+                                    response_rate_count_sms[imei]+=1
+                                    response_latency_sms[imei]+=(missed_ts+3600)-outgoing
+                                else:
+                                    response_rate_count_sms[imei] = 1
+                                    response_latency_sms[imei]=(missed_ts+3600)-outgoing
+                                break
+	"""
+    # code ends here
 
     print "Number of SMS for all devices on a day"
 
@@ -505,23 +813,48 @@ def write_stats_to_csv():
 
         j = len(inner_list)
 
-        try:
-          files_csv[imei][date]
-        except KeyError:
-          files_csv[imei][date] = {}
-          files_csv[imei][date]["Total Duration"] = 0
-          files_csv[imei][date]["Distinct Calls"] = 0
-          files_csv[imei][date]["Num of calls"] = 0
-          files_csv[imei][date]["Distinct Locations"] = 0
+        # Dongho       
+        #if date>'2015-02-11' and date<'2015-04-27': 
+        if date >= begin_date.strftime("%Y-%m-%d") and date <= end_date.strftime("%Y-%m-%d"):
+            try:
+              files_csv[imei][date]
+            except KeyError:
+              files_csv[imei][date] = {}
+              files_csv[imei][date]["Total Duration"] = 0
+              files_csv[imei][date]["Distinct Calls"] = 0
+              files_csv[imei][date]["Num of calls"] = 0
+              files_csv[imei][date]["Distinct Locations"] = 0
 
-        files_csv[imei][date]["Number of SMS"] = j
+            files_csv[imei][date]["Number of SMS"] = j
 
-        print "Number of sms on {} is {}".format(imei,j)
-       
-        j = len(distinct_msg)
-        files_csv[imei][date]["Distinct users SMS"] = j
+            print "Number of sms on {} is {}".format(imei,j)
+           
+            j = len(distinct_msg)
+            files_csv[imei][date]["Distinct users SMS"] = j
 
-        print "Number of distinct sms called on {} is {}".format(date,j)
+            print "Number of distinct sms called on {} is {}".format(date,j)
+
+
+    ########################################
+     
+    # Discretionary sms stats
+
+    for imei, value in new_contacts_sms_disc.iteritems():
+        new_contacts_sms_disc[imei] = second_contacts_sms_disc[imei] - first_contacts_sms_disc[imei]
+
+        for call in new_contacts_sms_disc[imei]:
+            if imei in shannons_entropy_sms_disc:
+                shannons_entropy_sms_disc[imei][call] = shannons_entropy_sms[imei][call]
+            else:
+                shannons_entropy_sms_disc[imei] = {}
+                shannons_entropy_sms_disc[imei][call] = shannons_entropy_sms[imei][call]
+
+    #print shannons_entropy_sms_disc
+    #exit()
+    #######################################
+
+
+
 
     cur = con.cursor()
     times_list = []
@@ -625,6 +958,7 @@ def write_stats_to_csv():
         for element in time_long_lat:
           time_hour = element[0][:element[0].index(":")]
           print(time_hour)
+          record_time = int(element[3])
           plus_one = int(time_hour)+1
           if plus_one<10:
             plus_one = "0"+str(plus_one)
@@ -640,15 +974,50 @@ def write_stats_to_csv():
             
               try:
                 shannons_location_update[imei]
+                shannons_location_discretionary[imei]
                 day_night_location_ratio[imei]
               except KeyError:
                 shannons_location_update[imei] = {}
+                shannons_location_discretionary[imei] = {}
                 day_night_location_ratio[imei] = {}
+                first_location[imei] = set()
+                second_location[imei] = set()
+                location_list[imei] = []
+                first_location_discretionary[imei] = set()
+                second_location_discretionary[imei] = set()
+                new_location_discretionary[imei] = set()
+                new_location[imei] = set()
               
+              lng = float("{0:.2f}".format(float(element[1])))
+              lat = float("{0:.2f}".format(float(element[2])))
+              lng3 = float("{0:.3f}".format(float(element[1])))
+              lat3 = float("{0:.3f}".format(float(element[2])))
+              location_bin3 = str(lng3) + " " + str(lat3)
+              # Get the first two weeks contact, comparison date is 3-20-2015
+              #if record_time<1426824000:
+              if record_time <= split_time: # Dongho
+                first_location[imei].add(str(lng)+" "+str(lat))
+              else:
+                second_location[imei].add(str(lng)+" "+str(lat))
+                
+              location_list[imei].append(str(lng)+" "+str(lat))
+              # Avoid the first two weeks data. Divide the remaining data into two. 
+              # Remove data before 2-26-2015 and split data at 3-26-2015
+              # Dongho: Just did the same thing with right above
+              #if record_time>1425010915 and record_time<1427342400:
+              if record_time > start_time and record_time <= split_time:
+                first_location_discretionary[imei].add(str(lng3)+" "+str(lat3))
+              #elif record_time>1427342400:
+              elif record_time > split_time:
+                second_location_discretionary[imei].add(str(lng3)+" "+str(lat3))
+            
+                
               try:
                 shannons_location_update[imei][location_bin] += 1
+                shannons_location_discretionary[imei][location_bin3] += 1
               except KeyError:
                 shannons_location_update[imei][location_bin] = 1
+                shannons_location_discretionary[imei][location_bin3] = 1
 
               if element[0]>"18:00" and element[0]<"6:00":
                 try:
@@ -702,7 +1071,25 @@ def write_stats_to_csv():
     resultFile.close()
 
     ########################################
-        
+     
+    # Discretionary travel stats
+
+    for imei, value in new_location_discretionary.iteritems():
+        new_location_discretionary[imei] = second_location_discretionary[imei] - first_location_discretionary[imei]
+
+        for location in new_location_discretionary[imei]:
+            if imei in shannons_location_discretionary3:
+                shannons_location_discretionary3[imei][location] = shannons_location_discretionary[imei][location]
+            else:
+                shannons_location_discretionary3[imei] = {}
+                shannons_location_discretionary3[imei][location] = shannons_location_discretionary[imei][location]
+
+        # add a new shannons dict for 2/3 precision values... :)
+
+    #print shannons_location_discretionary3
+    #######################################
+
+
     for imei, value in distinct_locations.iteritems():
       for date, inner_list in value.iteritems():
         print "\n"
@@ -722,19 +1109,42 @@ def write_stats_to_csv():
         except KeyError:
           files_csv[imei] = {}
         
-        try:
-          files_csv[imei][date]
-        except KeyError:
-          files_csv[imei][date] = {}
-          files_csv[imei][date]["Number of SMS"] = 0
-          files_csv[imei][date]["Total Duration"] = 0
-          files_csv[imei][date]["Distinct Calls"] = 0
-          files_csv[imei][date]["Num of calls"] = 0
-          files_csv[imei][date]["Distinct users SMS"] = 0
+        # Dongho       
+        #if date>'2015-02-11' and date<'2015-04-27': 
+        if date >= begin_date.strftime("%Y-%m-%d") and date <= end_date.strftime("%Y-%m-%d"):
+            try:
+              files_csv[imei][date]
+            except KeyError:
+              files_csv[imei][date] = {}
+              files_csv[imei][date]["Number of SMS"] = 0
+              files_csv[imei][date]["Total Duration"] = 0
+              files_csv[imei][date]["Distinct Calls"] = 0
+              files_csv[imei][date]["Num of calls"] = 0
+              files_csv[imei][date]["Distinct users SMS"] = 0
 
-        files_csv[imei][date]["Distinct Locations"] = j
-        print "Distinct locations on {} is {}".format(date,j)
-    
+            files_csv[imei][date]["Distinct Locations"] = j
+            print "Distinct locations on {} is {}".format(date,j)
+   
+
+    ar_coefficient()
+    #print ar_values
+
+        
+    if len(file) > 0:
+      resultFile = open(file + "ar_values.csv",'wb')
+    else:  
+      resultFile = open("ar_values.csv",'wb')
+    wr = csv.writer(resultFile, dialect='excel')
+    wr.writerow(['IMEI','v1','v2','v3','v4','v5','v6','v7','v8','v9','v10','v11','v12','v13','v14','v15','v16','v17','v18','v19','v20','v21','v22','v23','v24','v25','v26','v27','v28','v29','v30','v31'])
+    for imei,lis in ar_values.iteritems():
+      x = []
+      x.append(imei)
+      for d in lis:
+        x.append(d)
+      wr.writerow(x)
+
+    resultFile.close()
+    #exit()
     #### Code to add the first call log date and number of days of good call
 
     cur = con.cursor()
@@ -752,7 +1162,8 @@ def write_stats_to_csv():
                           where probe like '%Call%'""")
 
     for d in data:
-      if time.strftime('%Y-%m-%d', time.localtime(d[1])) > '2015-02-11' and time.strftime('%Y-%m-%d', time.localtime(d[1])) < '2015-04-27':
+      #if time.strftime('%Y-%m-%d', time.localtime(d[1])) > '2015-02-11' and time.strftime('%Y-%m-%d', time.localtime(d[1])) < '2015-04-27':
+      if time.strftime('%Y-%m-%d', time.localtime(d[1])) > begin_date.strftime("%Y-%m-%d") and time.strftime('%Y-%m-%d', time.localtime(d[1])) < end_date.strftime("%Y-%m-%d"):
         imei_num_timestamp[d[0]].append(time.strftime('%Y-%m-%d', time.localtime(d[1])))
 
     #print imei_num_timestamp
@@ -790,7 +1201,8 @@ def write_stats_to_csv():
                           where probe like '%Sms%'""")
 
     for d in data:
-      if time.strftime('%Y-%m-%d', time.localtime(d[1])) > '2015-02-11' and time.strftime('%Y-%m-%d', time.localtime(d[1])) < '2015-04-27':
+      #if time.strftime('%Y-%m-%d', time.localtime(d[1])) > '2015-02-11' and time.strftime('%Y-%m-%d', time.localtime(d[1])) < '2015-04-27':
+      if time.strftime('%Y-%m-%d', time.localtime(d[1])) > begin_date.strftime("%Y-%m-%d") and time.strftime('%Y-%m-%d', time.localtime(d[1])) < end_date.strftime("%Y-%m-%d"):
         imei_num_smstimestamp[d[0]].append(time.strftime('%Y-%m-%d', time.localtime(d[1])))
 
     #print imei_num_timestamp
@@ -817,7 +1229,8 @@ def write_stats_to_csv():
       imei_smstimestamp[imei] = time.strftime('%Y-%m-%d', time.localtime(timestamp))
     
     for imei,date1 in imei_smstimestamp.iteritems():
-      mdate = "2015-02-12"
+      #mdate = "2015-02-12"
+      mdate = begin_date.strftime("%Y-%m-%d") # Dongho
       mdate1 = datetime.datetime.strptime(mdate, "%Y-%m-%d")
 
       #d = time.strftime('%Y-%m-%d', time.localtime(int(date1)))
@@ -826,12 +1239,15 @@ def write_stats_to_csv():
       if d<mdate1:
         eligible_days_sms[imei] = 74
       else:
-        rdate = "2015-04-27"
+        #rdate = "2015-04-27"
+        rdate = end_date.strftime("%Y-%m-%d") # Dongho
         rdate1 = datetime.datetime.strptime(rdate, "%Y-%m-%d")
-        eligible_days_sms[imei] = (rdate1 - d).days
+        #eligible_days_sms[imei] = (rdate1 - d).days
+        eligible_days_sms[imei] = (rdate1).days # Dongho: due to different end date
 
     for imei,date1 in imei_timestamp.iteritems():
-      mdate = "2015-02-12"
+      #mdate = "2015-02-12"
+      mdate = begin_date.strftime("%Y-%m-%d") # Dongho
       mdate1 = datetime.datetime.strptime(mdate, "%Y-%m-%d")
 
       #d = time.strftime('%Y-%m-%d', time.localtime(int(date1)))
@@ -842,7 +1258,8 @@ def write_stats_to_csv():
       else:
         rdate = "2015-04-27"
         rdate1 = datetime.datetime.strptime(rdate, "%Y-%m-%d")
-        eligible_days_call[imei] = (rdate1 - d).days
+        #eligible_days_call[imei] = (rdate1 - d).days
+        eligible_days_sms[imei] = (rdate1).days # Dongho: due to different end date
     #### Code Ends here
 
 def create_csv():
@@ -852,11 +1269,20 @@ def create_csv():
     call_entropy = {}
     sms_entropy = {}
 
+    location_entropy_disc = {}
+    call_entropy_disc = {}
+    sms_entropy_disc = {}
+
     location_loyalty = {}
     call_loyalty = {}
     sms_loyalty = {}
     home_work_ratio = {}
     location_percentage_time_spent = {}
+    
+    location_loyalty_disc = {}
+    call_loyalty_disc = {}
+    sms_loyalty_disc = {}
+    location_percentage_time_spent_disc = {}
     
     location_stie = {}
     call_stie = {}
@@ -864,6 +1290,13 @@ def create_csv():
     location_stie_value = {}
     call_stie_value = {}
     sms_stie_value = {}
+    
+    location_stie_disc = {}
+    call_stie_disc = {}
+    sms_stie_disc = {}
+    location_wtie_disc = {}
+    call_wtie_disc = {}
+    sms_wtie_disc = {}
     
     location_wtie = {}
     call_wtie = {}
@@ -874,8 +1307,12 @@ def create_csv():
     
     location_count = {}
     location_unique_count = {}
+    location_count_disc = {}
+    location_unique_count_disc = {}
     call_count = {}
     sms_count = {}
+    call_count_disc = {}
+    sms_count_disc = {}
     day_night_ratio_location_value = {}
     day_night_ratio_call_value = {}
     day_night_ratio_sms_value = {}
@@ -888,11 +1325,26 @@ def create_csv():
     inout_ratio_call = {}
     inout_ratio_sms = {}
     response_rate = {}
+    response_latency_value = {}
+    response_rate_sms = {}
+    response_latency_value_sms = {}
     missed_call_rate = {}
     weekday_weekend_ratio_location_value = {}
     weekday_weekend_ratio_call_value = {}
     weekday_weekend_ratio_sms_value = {}
-    
+    new_contacts_call_duration = {}
+   
+    gyradius_avg = {}
+    ret_exp = {}
+    gyradius_median = {}
+    gyradiusk_median = {}
+    top_3_locations = {}
+    dist_above_100 = {}
+    third_place_top_2 = {}
+    third_place_top_3 = {}
+    third_place_top_4 = {}
+    third_place_top_5 = {}
+    third_place_top_6 = {}
     table = []
 
     # Calculate the Shannon's Entropy 
@@ -905,6 +1357,17 @@ def create_csv():
         if p_x > 0 and k > 1:
           entropy += - p_x*math.log(p_x, k)
       location_entropy[imei] = entropy
+    
+    # Calculate the Shannon's Entropy 
+    for imei, ndict in shannons_location_discretionary3.iteritems():
+      entropy = 0
+      sum1 = sum(ndict.values())
+      k = len(ndict)
+      for location_bin, count in ndict.iteritems():
+        p_x = float(count)/float(sum1)
+        if p_x > 0 and k > 1:
+          entropy += - p_x*math.log(p_x, k)
+      location_entropy_disc[imei] = entropy
     
     print "SHANNONS ENTROPY FOR LOCATION" 
     #for imei, ndict in location_entropy.iteritems():
@@ -936,6 +1399,32 @@ def create_csv():
           entropy += - p_x*math.log(p_x, k)
       sms_entropy[imei] = entropy
 
+    for imei, ndict in shannons_entropy_stats_disc.iteritems():
+      entropy = 0
+      sum1 = sum(ndict.values())
+      call_count_disc[imei] = sum1
+      k = len(ndict)
+      for location_bin, count in ndict.iteritems():
+        p_x = float(count)/float(sum1)
+        if p_x > 0 and k > 1:
+          entropy += - p_x*math.log(p_x, k)
+      call_entropy_disc[imei] = entropy
+
+    print "SHANNONS ENTROPY FOR CALL" 
+    #for imei, ndict in call_entropy.iteritems():
+    #  print ndict
+    
+    for imei, ndict in shannons_entropy_sms_disc.iteritems():
+      entropy = 0
+      sum1 = sum(ndict.values())
+      sms_count_disc[imei] = sum1
+      k = len(ndict)
+      for location_bin, count in ndict.iteritems():
+        p_x = float(count)/float(sum1)
+        if p_x > 0 and k > 1:
+          entropy += - p_x*math.log(p_x, k)
+      sms_entropy_disc[imei] = entropy
+
     #print "SHANNONS ENTROPY FOR SMS" 
     #for imei, ndict in sms_entropy.iteritems():
     #  print ndict
@@ -950,12 +1439,58 @@ def create_csv():
       location_unique_count[imei] = len(unique_locations_set)
       location_count[imei] = sum1
       top_3 = dict(Counter(ndict).most_common(3))
+      top_2 = dict(Counter(ndict).most_common(2))
+      top_4 = dict(Counter(ndict).most_common(4))
+      top_5 = dict(Counter(ndict).most_common(5))
+      top_6 = dict(Counter(ndict).most_common(6))
       #print top_3
+      top_3_locations[imei] = []
       for location_bin, count in top_3.iteritems():
+        #top_3_locations[imei].add(location_bin)
+        temp_list = [location_bin,]*count
+        for d in temp_list:
+                top_3_locations[imei].append(d)
         p_x = float(count)/sum1
         if p_x > 0:
           entropy += p_x
       location_loyalty[imei] = entropy
+      
+      top_k_count=min(top_2.itervalues())
+      third_place_top_2[imei] = (float(top_k_count)/float(sum1))*100
+
+      top_k_count=min(top_3.itervalues())
+      third_place_top_3[imei] = (float(top_k_count)/float(sum1))*100
+
+      top_k_count=min(top_4.itervalues())
+      third_place_top_4[imei] = (float(top_k_count)/float(sum1))*100
+
+      top_k_count=min(top_5.itervalues())
+      third_place_top_5[imei] = (float(top_k_count)/float(sum1))*100
+
+      top_k_count=min(top_6.itervalues())
+      third_place_top_6[imei] = (float(top_k_count)/float(sum1))*100
+
+    # Calculate the Loyalty DISC
+    for imei, ndict in shannons_location_discretionary3.iteritems():
+      entropy = 0
+      sum1 = sum(ndict.values())
+      unique_locations = list(ndict.keys())
+      unique_locations_set = set(unique_locations)
+
+      location_unique_count_disc[imei] = len(unique_locations_set)
+      location_count_disc[imei] = sum1
+        
+      top_3 = dict(Counter(ndict).most_common(3))
+      print "HERE"  
+      #top_3_locations[imei] = []
+      for location_bin, count in top_3.iteritems():
+        #top_3_locations[imei].append([location_bin,]*count)
+        p_x = float(count)/sum1
+        print count
+        print sum1
+        if p_x > 0:
+          entropy += p_x
+      location_loyalty_disc[imei] = entropy
 
     # Calculate the Percentage of the time spent 
     for imei, ndict in shannons_location_update.iteritems():
@@ -968,6 +1503,17 @@ def create_csv():
         
       location_percentage_time_spent[imei] = float("{0:.2f}".format(percent))
     
+    # Calculate the Percentage of the time spent DISC 
+    for imei, ndict in shannons_location_discretionary3.iteritems():
+      entropy = 0
+      sum1 = sum(ndict.values())
+      top_1 = dict(Counter(ndict).most_common(1))
+      #print top_3
+      for location_bin, count in top_1.iteritems():
+        percent = (float(count)/sum1)*100
+        
+      location_percentage_time_spent_disc[imei] = float("{0:.2f}".format(percent))
+    
     # Calculate the Day/night location ratio
     day_count = 0
     night_count = 0
@@ -978,8 +1524,11 @@ def create_csv():
           day_count = len(location_string)
         else:
           night_count = len(location_string)
-      day_night_ratio_location_value[imei]= float("{0:.2f}".format(float(day_count)/float(night_count)))
-    
+      try:  
+        day_night_ratio_location_value[imei]= float("{0:.2f}".format(float(day_count)/float(night_count)))
+      except ZeroDivisionError:
+        day_night_ratio_location_value[imei] = "NA"
+
     #print "LOYALTY FOR LOCATION" 
     #for imei, ndict in location_loyalty.iteritems():
     #  print ndict
@@ -996,16 +1545,51 @@ def create_csv():
       call_loyalty[imei] = entropy
       #calculate the number of contacts here
       distinct_contacts_count[imei] = len(set(distinct_contacts[imei]))
-      inout_ratio_call[imei] = (float(incoming_call_count[imei])/outgoing_call_count[imei])*100
-      response_rate[imei] = (float(incoming_call_count[imei])/(call_count[imei]-outgoing_call_count[imei]))*100
-      missed_call_rate[imei] = (float(missed_call_count[imei])/call_count[imei])*100
-      day_night_ratio_call_value[imei]= float("{0:.2f}".format(float(day_night_call_ratio[imei]["DAY"])/float(day_night_call_ratio[imei]["NIGHT"])))
-      weekday_weekend_ratio_call_value[imei]= float("{0:.2f}".format(float(weekday_weekend_call_ratio[imei]["weekday"])/float(weekday_weekend_call_ratio[imei]["weekend"])))
-
+      print max(((k, sum(1 for i in g)) for k, g in groupby(sorted(distinct_contacts[imei]))), key=itemgetter(1))
+      
+      try: # Dongho
+      	inout_ratio_call[imei] = (float(incoming_call_count[imei])/outgoing_call_count[imei])*100
+      except KeyError:
+      	print "CATCH ERROR"
+      try: #Dongho: 02232016
+        response_rate[imei] =  float("{0:.2f}".format((float(response_rate_count[imei])/float(missed_call_count[imei]))*100))
+      except KeyError:
+        print "CATCH ERROR"
+      try:
+        response_latency_value[imei] =  float("{0:.2f}".format((float(response_latency[imei])/float(response_rate_count[imei]))))
+      except KeyError:
+        print "CATCH ERROR"
+      try:
+      	missed_call_rate[imei] = (float(missed_call_count[imei])/call_count[imei])*100
+      except KeyError:
+      	print "CATCH ERROR"
+      # Dongho below made try & except
+      try:
+      	day_night_ratio_call_value[imei]= float("{0:.2f}".format(float(day_night_call_ratio[imei]["DAY"])/float(day_night_call_ratio[imei]["NIGHT"])))
+      except KeyError:
+      	print "CATCH ERROR"
+      try:
+        weekday_weekend_ratio_call_value[imei]= float("{0:.2f}".format(float(weekday_weekend_call_ratio[imei]["weekday"])/float(weekday_weekend_call_ratio[imei]["weekend"])))
+      except KeyError:
+        print "CATCH ERROR"
     #print "LOYALTY FOR CALL" 
     #for imei, ndict in call_loyalty.iteritems():
     #  print ndict
-    
+   
+
+    # Call loyalty DISC
+    for imei, ndict in shannons_entropy_stats_disc.iteritems():
+      entropy = 0
+      sum1 = sum(ndict.values())
+      top_3 = dict(Counter(ndict).most_common(3))
+      #print top_3
+      for location_bin, count in top_3.iteritems():
+        p_x = float(count)/sum1
+        if p_x > 0:
+          entropy += p_x
+      call_loyalty_disc[imei] = entropy
+
+
     for imei, ndict in shannons_entropy_sms.iteritems():
       entropy = 0
       sum1 = sum(ndict.values())
@@ -1017,17 +1601,204 @@ def create_csv():
           entropy += p_x
       sms_loyalty[imei] = entropy
       distinct_contacts_sms_count[imei] = len(set(distinct_contacts_sms[imei]))
+      if imei in response_rate_sms:
+        response_rate_sms[imei] =  float("{0:.2f}".format((float(response_rate_count_sms[imei])/float(incoming_sms_count[imei]))*100))
+        response_latency_value_sms[imei] =  float("{0:.2f}".format((float(response_latency_sms[imei])/float(response_rate_count_sms[imei]))))
+      else:
+        print "No response rate for this IMEI"
+        print imei
       try:  
         inout_ratio_sms[imei] = (float(incoming_sms_count[imei])/outgoing_sms_count[imei])*100
       except KeyError:
         pass
-      day_night_ratio_sms_value[imei]= float("{0:.2f}".format(float(day_night_sms_ratio[imei]["DAY"])/float(day_night_sms_ratio[imei]["NIGHT"])))
-      weekday_weekend_ratio_sms_value[imei]= float("{0:.2f}".format(float(weekday_weekend_sms_ratio[imei]["weekday"])/float(weekday_weekend_sms_ratio[imei]["weekend"])))
+      try:  
+        day_night_ratio_sms_value[imei]= float("{0:.2f}".format(float(day_night_sms_ratio[imei]["DAY"])/float(day_night_sms_ratio[imei]["NIGHT"])))
+      except KeyError:
+        day_night_ratio_sms_value[imei]= "NA"
+      try:  
+        weekday_weekend_ratio_sms_value[imei]= float("{0:.2f}".format(float(weekday_weekend_sms_ratio[imei]["weekday"])/float(weekday_weekend_sms_ratio[imei]["weekend"])))
+      except KeyError:
+        print "CATCH ERROR"
     #print "LOYALTY FOR SMS" 
     #for imei, ndict in sms_loyalty.iteritems():
     #  print ndict
 
+    # Sms loyalty DISC
+    for imei, ndict in shannons_entropy_sms_disc.iteritems():
+      entropy = 0
+      sum1 = sum(ndict.values())
+      top_3 = dict(Counter(ndict).most_common(3))
+      #print top_3
+      for location_bin, count in top_3.iteritems():
+        p_x = float(count)/sum1
+        if p_x > 0:
+          entropy += p_x
+      sms_loyalty_disc[imei] = entropy
+
+    # Strong weak ties, DISC
     print "Strong ties for locations"
+    for imei, ndict in shannons_location_discretionary3.iteritems():
+      strong_tie = 0
+      last = 0
+      strong_tie_num = float(len(ndict))/3
+      sum1 = sum(ndict.values())
+      fraction = strong_tie_num - int(strong_tie_num)
+      
+      if fraction > 0:
+        pick_k = int(strong_tie_num) + 1
+      else:
+        pick_k = int(strong_tie_num)
+
+      #number_of_strong_ties_location[imei] = pick_k
+      
+      #top_2 = dict(Counter(ndict).most_common(2))
+      #value = 0;
+      #top_2_list = top_2.values()
+      #print top_2_list
+      #try:
+      #  if top_2_list[0]>top_2_list[1]:
+      #    home_work_ratio[imei] = float("{0:.2f}".format(float(top_2_list[0])/float(top_2_list[1])))
+      #  else:
+      #    home_work_ratio[imei] = float("{0:.2f}".format(float(top_2_list[1])/float(top_2_list[0])))
+      #except:
+      #   home_work_ratio[imei] = "NA"
+      top_k = dict(Counter(ndict).most_common(pick_k))
+      bottom_k = sorted(ndict.values())[:pick_k]
+      for location_bin, count in top_k.iteritems():
+        strong_tie += count
+        last = count
+      
+      #print "Fraction" 
+      #print fraction 
+      if fraction > 0:
+        strong_tie -= last
+        strong_tie += float(last)*fraction
+
+      #location_stie_value[imei] = strong_tie
+      #print "Strong tie value above"+str(strong_tie)
+      strong_tie = (strong_tie/float(sum1)) * 100
+      #print "Strong tie"+str(strong_tie)
+
+      location_stie_disc[imei] = strong_tie
+
+      weak_tie = sum(bottom_k)
+      if fraction > 0:
+        weak_tie -= bottom_k[pick_k-1]
+        weak_tie += float(bottom_k[pick_k-1])*fraction
+
+      #location_wtie_value[imei] = weak_tie
+      weak_tie = (weak_tie/float(sum1)) * 100
+
+      location_wtie_disc[imei] = weak_tie
+
+
+    #print "STRONG FOR LOCATION" 
+    #for imei, ndict in location_stie.iteritems():
+    #  print ndict
+
+    for imei, ndict in shannons_entropy_stats_disc.iteritems():
+      strong_tie = 0
+      last = 0
+      strong_tie_num = float(len(ndict))/3
+      sum1 = sum(ndict.values())
+      print strong_tie_num
+      fraction = strong_tie_num - int(strong_tie_num)
+      
+      if fraction > 0:
+        pick_k = int(strong_tie_num) + 1
+      else:
+        pick_k = int(strong_tie_num)
+
+      #print pick_k
+
+      #number_of_strong_ties_call[imei] = pick_k
+
+      top_k = dict(Counter(ndict).most_common(pick_k))
+      bottom_k = sorted(ndict.values())[:pick_k]
+      #print top_3
+      for location_bin, count in top_k.iteritems():
+        strong_tie += count
+        last = count
+      
+      #print "Fraction" 
+      #print fraction 
+      if fraction > 0:
+        strong_tie -= last
+        strong_tie += float(last)*fraction
+
+      #call_stie_value[imei] = strong_tie
+      strong_tie = (strong_tie/float(sum1)) * 100
+      #print strong_tie
+
+      call_stie_disc[imei] = strong_tie
+      weak_tie = sum(bottom_k)
+      if fraction > 0:
+        weak_tie -= bottom_k[pick_k-1]
+        weak_tie += float(bottom_k[pick_k-1])*fraction
+
+      #call_wtie_value[imei] = weak_tie
+      weak_tie = (weak_tie/float(sum1)) * 100
+      #print weak_tie
+
+      call_wtie_disc[imei] = weak_tie
+
+    #print "STRONG FOR CALLS" 
+    #for imei, ndict in call_stie.iteritems():
+    #  print ndict
+
+
+    for imei, ndict in shannons_entropy_sms_disc.iteritems():
+      strong_tie = 0
+      last = 0
+      strong_tie_num = float(len(ndict))/3
+      sum1 = sum(ndict.values())
+      print strong_tie_num
+      fraction = strong_tie_num - int(strong_tie_num)
+      
+      if fraction > 0:
+        pick_k = int(strong_tie_num) + 1
+      else:
+        pick_k = int(strong_tie_num)
+      
+      #number_of_strong_ties_sms[imei] = pick_k
+
+      #print pick_k
+      top_k = dict(Counter(ndict).most_common(pick_k))
+      bottom_k = sorted(ndict.values())[:pick_k]
+      #print top_3
+      for location_bin, count in top_k.iteritems():
+        strong_tie += count
+        last = count
+      
+      #print "Fraction" 
+      #print fraction 
+      if fraction > 0:
+        strong_tie -= last
+        strong_tie += float(last)*fraction
+
+      #sms_stie_value[imei] = strong_tie
+      strong_tie = (strong_tie/float(sum1)) * 100
+      #print strong_tie
+
+      sms_stie_disc[imei] = strong_tie
+
+      weak_tie = sum(bottom_k)
+      if fraction > 0:
+        weak_tie -= bottom_k[pick_k-1]
+        weak_tie += float(bottom_k[pick_k-1])*fraction
+
+      #sms_wtie_value[imei] = weak_tie
+      weak_tie = (weak_tie/float(sum1)) * 100
+      #print weak_tie
+
+      sms_wtie_disc[imei] = weak_tie
+    #print "STRONG FOR LOCATION" 
+    #for imei, ndict in sms_stie.iteritems():
+    #  print ndict
+
+
+
+    #print "Strong ties for locations"
     for imei, ndict in shannons_location_update.iteritems():
       strong_tie = 0
       last = 0
@@ -1183,9 +1954,7 @@ def create_csv():
       print weak_tie
 
       sms_wtie[imei] = weak_tie
-    #print "STRONG FOR LOCATION" 
-    #for imei, ndict in sms_stie.iteritems():
-    #  print ndict
+
 
 
     if len(file) > 0:
@@ -1193,7 +1962,7 @@ def create_csv():
     else:  
       resultFile = open("output_entropy.csv",'wb')
     wr = csv.writer(resultFile, dialect='excel')
-    wr.writerow(['IMEI','Call Count','Sms Count','Location Count','Unique location count','Day night location ratio','Percentage of time spent in a location','First Call log date','Days with call data','Number of days in which call data is spread','Number of calls per day','Distinct users call','Total Call duration','In-Out ratio','Call Response rate','Missed call percentage','First Sms log date','Days with Sms data','Number of days in which sms data is spread','Number of Sms per day','Distinct users sms','Inout ratio SMS','Call Entropy','Sms Entropy','Location Entropy','Call Loyalty','Sms Loyalty','Location Loyalty','Call Strong ties','Sms Strong ties','Location Strong ties','Call Weak ties','Sms Weak ties','Location Weak ties','Call Strong ties value','Sms Strong ties value','Location Strong ties value','Call Weak ties value','Sms Weak ties value','Location Weak ties value','Call S/W ties count','Sms S/W ties count','Location S/W ties count','Home Work Ratio','Day night Call ratio','Day night sms ratio','Weekday weekend call ratio','Weekday weekend SMS ratio'])
+    wr.writerow(['IMEI','Call Count','Sms Count','Location Count','Unique location count','Day night location ratio','Percentage of time spent in a location','Number of new locations','First Call log date','Days with call data','Number of days in which call data is spread','Number of calls per day','Distinct users call','Distinct users called outgoing','Total Call duration','In-Out ratio','Call Response rate','Call Response Latency','Missed call percentage','Number of new contacts call','Time spend with new contacts','Percentage of time spend with new contacts','Number of new contacts in call for outgoing calls','Longest call Percentage','First Sms log date','Days with Sms data','Number of days in which sms data is spread','Number of Sms per day','Distinct users sms','Inout ratio SMS','Number of new contacts SMS','Call Entropy','Sms Entropy','Location Entropy','Call Loyalty','Sms Loyalty','Location Loyalty','Call Strong ties','Sms Strong ties','Location Strong ties','Call Weak ties','Sms Weak ties','Location Weak ties','Call Strong ties value','Sms Strong ties value','Location Strong ties value','Call Weak ties value','Sms Weak ties value','Location Weak ties value','Call S/W ties ratio','Sms S/W ties ratio','Location S/W ties ratio','Home Work Ratio','Day night Call ratio','Day night sms ratio','Weekday weekend call ratio','Weekday weekend SMS ratio','Gyradius Average','Gyradius median','Returner(1) vs Explorer(0)','Discretionary vs All','Distance above 100 kms percentage','Third place:k=2','Third place:k=3','Third place:k=4','Third place:k=5','Third place:k=6','AR cyclicity 1','AR cyclicity 7','AR cyclicity 31'])
     imei_list = list(set(device_imei.values()))
     for imei in imei_list:
       row_list = []
@@ -1201,6 +1970,39 @@ def create_csv():
       if imei.find("androidId")>0:
         continue
 
+
+      
+      if options.ignore == None and imei in new_contacts_call:
+          new_contacts_call[imei] = second_contacts_call[imei] - first_contacts_call[imei]
+          if imei in new_contacts_call_outgoing:
+            if imei in second_contacts_call_outgoing:
+                if imei in first_contacts_call_outgoing:
+                    new_contacts_call_outgoing[imei] = second_contacts_call_outgoing[imei] - first_contacts_call_outgoing[imei]
+          else:
+            if imei in second_contacts_call_outgoing:
+                if imei in first_contacts_call_outgoing:
+                    new_contacts_call_outgoing[imei] = set()
+                    new_contacts_call_outgoing[imei] = second_contacts_call_outgoing[imei] - first_contacts_call_outgoing[imei]
+
+          # find the new contact durations, add all the new contact durations
+
+          new_contacts_call_duration[imei] = 0
+          for d in new_contacts_call[imei]:
+            new_contacts_call_duration[imei] += duration_call[imei][d]
+
+          new_contacts_sms[imei] = second_contacts_sms[imei] - first_contacts_sms[imei]
+          if imei in second_location:
+            if imei in first_location:
+                new_location[imei] = second_location[imei] - first_location[imei]
+                new_location_discretionary[imei] = second_location_discretionary[imei] - first_location_discretionary[imei]
+            if imei in location_list:
+                gyradius_avg[imei] = get_gyradius(location_list[imei],1)
+                gyradius_median[imei] = get_gyradius(location_list[imei],0)
+                gyradiusk_median[imei] = get_gyradius(top_3_locations[imei],0)
+                dist_above_100[imei] = get_distance_above_100_percent(location_list[imei])
+                if gyradius_median[imei] != 0:
+                        ret_exp[imei] = float(gyradiusk_median[imei])/float(gyradius_median[imei])
+    
       try:
         row_list.append(call_count[imei])
       except KeyError:
@@ -1226,6 +2028,10 @@ def create_csv():
       except KeyError:
         row_list.append("NA")
       try:
+        row_list.append(len(new_location[imei]))
+      except KeyError:
+        row_list.append("NA")
+      try:
         row_list.append(imei_timestamp[imei])
       except KeyError:
         row_list.append("NA")
@@ -1246,6 +2052,10 @@ def create_csv():
       except KeyError:
         row_list.append("NA")
       try:
+        row_list.append(distinct_calls_outgoing[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
         row_list.append(call_duration_total[imei])
       except KeyError:
         row_list.append("NA")
@@ -1258,7 +2068,34 @@ def create_csv():
       except KeyError:
         row_list.append("NA")
       try:
+        row_list.append(response_latency_value[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
         row_list.append(missed_call_rate[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(len(new_contacts_call[imei]))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(new_contacts_call_duration[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format((float(new_contacts_call_duration[imei])/float(call_duration_total[imei]))*100)))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(len(new_contacts_call_outgoing[imei]))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        print longest_call[imei]
+        print call_duration_total[imei]
+        print float("{0:.2f}".format((float(longest_call[imei])/float(call_duration_total[imei]))*100))
+        row_list.append(float("{0:.2f}".format((float(longest_call[imei])/float(call_duration_total[imei]))*100)))
       except KeyError:
         row_list.append("NA")
       try:
@@ -1283,6 +2120,10 @@ def create_csv():
         row_list.append("NA")
       try:
         row_list.append(inout_ratio_sms[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(len(new_contacts_sms[imei]))
       except KeyError:
         row_list.append("NA")
       try:
@@ -1400,16 +2241,22 @@ def create_csv():
       except KeyError:
         row_list.append("NA")
       try:
-        row_list.append(number_of_strong_ties_call[imei])
+        rd_2 = int(round(call_stie[imei]))
+        rd_3 = int(round(call_wtie[imei]))
+        row_list.append(float("{0:.2f}".format((float(rd_2)/float(rd_3)))))
       except KeyError:
         row_list.append("NA")
       try:
-        row_list.append(number_of_strong_ties_sms[imei])
-      except KeyError:
+        rd_2 = int(round(sms_stie[imei]))
+        rd_3 = int(round(sms_wtie[imei]))
+        row_list.append(float("{0:.2f}".format((float(rd_2)/float(rd_3)))))
+      except:
         row_list.append("NA")
       try:
-        row_list.append(number_of_strong_ties_location[imei])
-      except KeyError:
+        rd_2 = int(round(location_stie[imei]))
+        rd_3 = int(round(location_wtie[imei]))
+        row_list.append(float("{0:.2f}".format((float(rd_2)/float(rd_3)))))
+      except:
         row_list.append("NA")
       try:
         row_list.append(home_work_ratio[imei])
@@ -1431,6 +2278,58 @@ def create_csv():
         row_list.append(weekday_weekend_ratio_sms_value[imei])
       except KeyError:
         row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(gyradius_avg[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(gyradius_median[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(ret_exp[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format((float(len(new_location_discretionary[imei]))/float(len(first_location_discretionary[imei].union(second_location_discretionary[imei]))))))*100)
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(dist_above_100[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(third_place_top_2[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(third_place_top_3[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(third_place_top_4[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(third_place_top_5[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(third_place_top_6[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(ar_values[imei][0])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(ar_values[imei][6])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(float("{0:.2f}".format(ar_values[imei][30])))
+      except KeyError:
+        row_list.append("NA")
           
       wr.writerow(row_list)
 
@@ -1448,6 +2347,97 @@ def create_csv():
       wr.writerow(row_list)
 
     resultFile.close()
+
+    #################################################3
+
+    # Dicretionary csv file
+
+
+    if len(file) > 0:
+      resultFile = open(file + "_entropy_disc.csv",'wb')
+    else:  
+      resultFile = open("output_entropy_disc.csv",'wb')
+    wr = csv.writer(resultFile, dialect='excel')
+    wr.writerow(['IMEI','Call Count','Sms Count','Unique location count','Percentage of time spent in a location','Call Entropy','Sms Entropy','Location Entropy','Call Loyalty','Sms Loyalty','Location Loyalty','Call Strong ties','Sms Strong ties','Location Strong ties','Call Weak ties','Sms Weak ties','Location Weak ties'])
+
+    for imei in imei_list:
+      row_list = []
+      row_list.append(imei)
+      if imei.find("androidId")>0:
+        continue
+
+      try:
+        row_list.append(call_count_disc[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(sms_count_disc[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(location_unique_count_disc[imei])
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(round(location_percentage_time_spent[imei]))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(round(call_entropy_disc[imei]*100))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(round(sms_entropy_disc[imei]*100))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(round(location_entropy_disc[imei]*100))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(round(call_loyalty_disc[imei]*100))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(round(sms_loyalty_disc[imei]*100))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(round(location_loyalty_disc[imei]*100))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(int(round(call_stie_disc[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(int(round(sms_stie_disc[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(int(round(location_stie_disc[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(int(round(call_wtie_disc[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(int(round(sms_wtie_disc[imei])))
+      except KeyError:
+        row_list.append("NA")
+      try:
+        row_list.append(int(round(location_wtie_disc[imei])))
+      except KeyError:
+        row_list.append("NA")
+          
+      wr.writerow(row_list)
+
+    resultFile.close()
+
+
+
+
 ########################################################
 
 ############### Call type csv file ######################
@@ -1742,8 +2732,136 @@ def create_csv():
     resultFile.close()
 #####################################################################
 
+def ar_coefficient():
+        list_calls = []
+
+        for device, date_value in files_csv.iteritems():
+                od = OrderedDict(sorted(files_csv[device].items()))
+                print od
+                new_list = []
+                for date_val, calls in od.iteritems():
+                        new_list.append(calls['Num of calls'])
+                print new_list
+                flag = 0                
+
+                for d in new_list:
+                        if d!=0:
+                                flag = 1
+                if flag == 0 or len(new_list)<=31:
+                        continue
+
+                X = np.array(new_list)
+
+                print X
+                print X.shape
+                if len(new_list)<=31:
+                        coefs_est, sigma_est = alg.AR_est_YW(X, len(new_list)-1)
+                else:
+                        coefs_est, sigma_est = alg.AR_est_YW(X, 31)
+                # no rigorous purpose behind 100 transients
+                #X_hat, _, _ = utils.ar_generator(
+                #    N=npts, sigma=sigma_est, coefs=coefs_est, drop_transients=100, v=noise
+                #    )
+                print "Coefficients"
+                ar_values[device_imei[device]]=[]
+                for d in coefs_est:
+                    print d
+                    ar_values[device_imei[device]].append(round(float(d),2))
 
 
+
+
+
+
+def get_gyradius(uset,average):
+    x = []
+    y = []
+    avg_radius = []
+
+    for pair in uset:
+        lstr = pair.split()
+        x.append(float(lstr[0]))    
+        y.append(float(lstr[1]))    
+
+    #print uset
+    centroid = get_centroid(x,y)
+
+    for i in range(len(x)):
+        #a = numpy.array((x[i],y[i]))
+        a = (x[i],y[i])
+        #avg_radius.append(numpy.sqrt(numpy.sum((a-centroid)**2)))
+        avg_radius.append(vincenty(centroid, a).km)
+
+    #print avg_radius/len(x)
+    if average == 1:
+        return numpy.average(avg_radius)
+    else:
+        return numpy.median(avg_radius)
+
+def get_distance_above_100_percent(uset):
+    x = []
+    y = []
+    count = 0
+    dist_list = []
+
+    for pair in uset:
+        lstr = pair.split()
+        y.append(float(lstr[0]))    
+        x.append(float(lstr[1]))    
+
+    #print uset
+
+    centroid = get_centroid(x,y)
+
+    print "POINTS"
+    for i in range(len(x)):
+        #a = numpy.array((x[i],y[i]))
+        a = (x[i],y[i])
+        print a
+        #avg_radius.append(numpy.sqrt(numpy.sum((a-centroid)**2)))
+        dist = vincenty(centroid, a).km
+        dist_list.append(dist)
+        #print dist
+        if dist>100:
+            count+=1
+
+    #print avg_radius/len(x)
+    per = (float(count)/float(len(x)))*100
+     
+    #if int(per) == 100:
+    #    print centroid
+    #    print dist_list
+
+    return per
+
+def get_centroid(x_list,y_list):
+    if len(x_list) == 1:
+        return (x_list[0],y_list[0])
+
+    x = 0
+    y = 0
+    z = 0
+
+    for i in range(len(x_list)):
+        latitude = x_list[i] * math.pi / 180
+        longitude = y_list[i] * math.pi / 180
+
+        x += math.cos(latitude) * math.cos(longitude)
+        y += math.cos(latitude) * math.sin(longitude)
+        z += math.sin(latitude)
+
+    total = len(x_list)
+
+    x = x / total
+    y = y / total
+    z = z / total
+
+    centralLongitude = math.atan2(y, x)
+    centralSquareRoot = math.sqrt(x * x + y * y)
+    centralLatitude = math.atan2(z, centralSquareRoot)
+
+    return (centralLatitude * 180 /math.pi, centralLongitude * 180 / math.pi)
+     
 
 start = strftime("%Y-%m-%d %H:%M:%S", localtime())
 
@@ -1758,6 +2876,7 @@ for db_file in f:
     new_db = utils.Db_Utils(db_file)
 
     con = lite.connect(db_file)
+
     write_stats_to_csv()
 
     continue
@@ -1825,6 +2944,7 @@ end = strftime("%Y-%m-%d %H:%M:%S", localtime())
 
 print start
 print end
+
 
 
 
